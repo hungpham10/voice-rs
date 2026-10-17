@@ -9,12 +9,16 @@
 //! - [`dataset`] — dataset nhiều giọng + cắt đoạn + RNG xác định.
 //! - [`device`] — chọn backend từ `--device`.
 //! - [`train`] — `train bridge` (Luồng 1).
+//! - [`overfit`] — `train overfit` (GĐ4, 1 câu).
 //! - [`eval`] — chỉ số + cổng PASS/FAIL.
+//! - [`hub`] — đẩy kết quả lên HuggingFace Hub (mặc định tắt).
 
 pub mod data;
 pub mod dataset;
 pub mod device;
 pub mod eval;
+pub mod hub;
 pub mod manifest;
 pub mod mel;
+pub mod overfit;
 pub mod train;

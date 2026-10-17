@@ -35,7 +35,7 @@ GitHub Release  assets-v1            ──►  voice-assets.tar.gz
    • sources/vits_ljs_dec/            (155 .npy + config + ref_*.npz)
 
 GitHub Release  v2.2.9  (cargo-dist)  ──►  voice-{hubert,train,models}-....tar.xz
-   • embed  ·  train_adapter  ·  verify_dec   (Linux x86_64)
+   • embed  ·  voice-train  ·  verify_dec   (Linux x86_64)
 
 repo  samples/422-122949-0031.wav     ←   wav mẫu (nằm trong git)
 ```
@@ -46,7 +46,7 @@ Ba binary:
 |---|---|
 | `embed` | wav giọng đích → features ContentVec `[1,T,768]` (trọng số nhúng sẵn trong binary) |
 | `verify_dec` | validate `dec` (Rust) khớp PyTorch (bước kiểm tra trước khi train) |
-| `train_adapter` | huấn luyện adapter trên speaker đích |
+| `voice-train` | công cụ huấn luyện thống nhất: `train overfit` (1 câu), `train bridge` (nhiều giọng), `eval` |
 
 ---
 
@@ -87,7 +87,7 @@ SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh
 `run_training.sh` sẽ tự:
 1. sinh features nếu còn thiếu (`embed`),
 2. chạy **validation** (`verify_dec`) — so `dec` với ground truth PyTorch,
-3. chạy **training** (`train_adapter`) — ghi `test_output.wav` + `sources/features/adapter.bpk`.
+3. chạy **training** (`voice-train train overfit`) — ghi `test_output.wav` + `sources/features/adapter.bpk`.
 
 Nếu `./bin/` chưa có binary, script tự rơi về `cargo run` (dành cho máy dev có Rust).
 
@@ -141,7 +141,7 @@ giọng), `drift` (phải ≈ 0), RMS (bắt audio im lặng/nổ). Để so gi�
 
 ## 5. Dùng giọng đích của bạn
 
-`train_adapter` cần **hai** thứ khớp nhau:
+`train overfit` cần **hai** thứ khớp nhau:
 
 1. một file **wav mono** (khuyến nghị 16 kHz, PCM) — giọng đích,
 2. **features ContentVec** của chính wav đó (`[1,T,768]`, do `embed` sinh).

@@ -33,6 +33,8 @@ pub struct BridgeConfig {
     /// Cứ bao nhiêu bước đo val một lần.
     pub val_every: usize,
     pub seed: u64,
+    /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` trong `out_dir`.
+    pub checkpoint_every: usize,
 }
 
 /// Kết quả huấn luyện.
@@ -47,6 +49,8 @@ pub struct BridgeSummary {
     pub adapter_path: PathBuf,
     pub best_path: PathBuf,
     pub history_path: PathBuf,
+    /// File checkpoint định kỳ (nếu `checkpoint_every > 0`).
+    pub checkpoint_path: Option<PathBuf>,
 }
 
 /// Huấn luyện cầu nối. `device` là CPU/… trước autodiff (hàm tự bật autodiff).
@@ -115,6 +119,12 @@ pub fn train_bridge(
     // (step, train_mel_l1, val_mel_l1) — val chỉ có ở bước đo.
     let mut history: Vec<(usize, f64, Option<f64>)> = Vec::with_capacity(cfg.steps);
 
+    let checkpoint_path = if cfg.checkpoint_every > 0 {
+        Some(cfg.out_dir.join("checkpoint.bpk"))
+    } else {
+        None
+    };
+
     for step in 0..cfg.steps {
         let mut feats_host: Vec<f32> = Vec::with_capacity(cfg.batch * c * t_h_seg);
         let mut wav_host: Vec<f32> = Vec::with_capacity(cfg.batch * n);
@@ -156,7 +166,15 @@ pub fn train_bridge(
         let grads = GradientsParams::from_grads(loss.backward(), &adapter);
         adapter = optim.step(cfg.lr, adapter, grads);
 
-        let do_val = cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
+        if let Some(path) = &checkpoint_path {
+            if (step + 1) % cfg.checkpoint_every == 0 {
+                adapter.save(path)?;
+                println!("  ↳ checkpoint step {} → {}", step + 1, path.display());
+            }
+        }
+
+        let do_val =
+            cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
             let report = eval::evaluate(&adapter, &gen, val_ds, &mel_cfg, &basis, &device)?;
             let improved = report.mean_mel_l1 < best_val;
@@ -195,6 +213,7 @@ pub fn train_bridge(
         adapter_path,
         best_path,
         history_path,
+        checkpoint_path,
     })
 }
 

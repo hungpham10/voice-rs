@@ -43,7 +43,10 @@ fi
 echo "== 2/3 VALIDATION: dec (Rust) vs PyTorch =="
 run_bin verify_dec voice-models | tail -4
 
-echo "== 3/3 TRAINING: adapter (SEG=${SEG} STEPS=${STEPS} LR=${LR}) =="
-SEG="${SEG}" STEPS="${STEPS}" LR="${LR}" run_bin train_adapter voice-train
+echo "== 3/3 TRAINING: adapter overfit 1 câu (SEG=${SEG} STEPS=${STEPS} LR=${LR}) =="
+run_bin voice-train voice-train train overfit \
+  --wav "${WAV}" --feats "${FEATS}" \
+  --seg "${SEG}" --steps "${STEPS}" --lr "${LR}" \
+  --out-wav test_output.wav --out-adapter sources/features/adapter.bpk
 
 echo "✔ xong: test_output.wav + sources/features/adapter.bpk"
