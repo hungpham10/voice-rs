@@ -38,27 +38,26 @@ scripts/               export trọng số / ground truth (Python, offline)
 
 ## Chạy nhanh (local)
 
-Cần Rust stable. Trọng số + ground truth tải riêng (xem dưới).
+Cần Rust stable. Trọng số tải riêng (xem dưới).
 
 ```bash
-cargo build --workspace
-cargo test -p voice-lib -p voice-mel -p voice-train
+cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạy đúng bộ này
 
-# kiểm tra generator so với PyTorch
-cargo run --release -p voice-models --example verify_dec
+./scripts/fetch_assets.sh          # tải bundle model từ Release assets-v1 → sources/
+./scripts/run_training.sh          # build → validation (verify_dec) → training adapter
 ```
 
 ## Asset nặng (không nằm trong git)
 
-`sources/` bị `.gitignore`. Cần các file sau để chạy đầy đủ:
+`sources/` bị `.gitignore`. Cách gọn nhất: `./scripts/fetch_assets.sh` tải bundle
+`voice-assets.tar.gz` từ Release [`assets-v1`](https://github.com/hungpham10/voice-rs/releases/tag/assets-v1)
+(ContentVec ONNX + `vits_dec` đã export + features mẫu), **không cần PyTorch**.
 
-| File | Lấy từ đâu |
-|---|---|
-| `sources/pretrained_ljs.pth` (139 MB) | [Google Drive của dự án VITS gốc](https://drive.google.com/drive/folders/1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2) hoặc Release `assets-v1` của repo này |
-| `sources/onnx_hubert_new/model.onnx` (360 MB) | Release `assets-v1` (ContentVec-768, `HubertModelWithFinalProj`) |
+Bundle do workflow `.github/workflows/release-assets.yml` tạo: kéo trọng số gốc
+([Google Drive VITS](https://drive.google.com/drive/folders/1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2)
++ ContentVec ONNX từ HuggingFace) rồi đóng gói lại.
 
-Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó tải asset, export, sinh
-features và huấn luyện.
+Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó gọi 2 script trên.
 
 ## Giấy phép
 

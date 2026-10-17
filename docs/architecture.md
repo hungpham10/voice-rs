@@ -2063,33 +2063,59 @@ Repo: `https://github.com/hungpham10/voice-rs` (public, MIT).
 - `samples/422-122949-0031.wav` (428 KB, LibriSpeech `test-clean`, CC BY 4.0)
   commit được vì nhỏ — kèm attribution ở `README.md`.
 
-### 16.2 Asset nặng — GitHub Release `assets-v1`
+### 16.2 Asset nặng — Release `assets-v1` (bundle đóng gói tự động)
 
-Hai file > 100 MB nằm ở Release (ngoài git):
+Trọng số gốc > 100 MB đến từ ngoài git:
 
-| File | Nguồn gốc |
+| File gốc | Nguồn |
 |---|---|
 | `pretrained_ljs.pth` (139 MB) | Google Drive dự án VITS gốc (`sources/vits/README.md:11`, folder `1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2`) |
-| `model.onnx` (360 MB) | ContentVec-768 `HubertModelWithFinalProj` — từ `IAHispano/Applio` `Resources/embedders/contentvec` / HF `lengyue233/content-vec-best` |
+| `model.onnx` (360 MB) | ContentVec-768 `HubertModelWithFinalProj` — HF (`lengyue233/content-vec-best` / `TigreGotico/voiceclonnx-rvc`) |
 
-Tải bằng `https://github.com/hungpham10/voice-rs/releases/download/assets-v1/<tên>`.
+Thay vì bắt Colab tự kéo Drive + HF rồi export, repo **đóng gói sẵn** thành một
+bundle duy nhất và publish lên Release:
 
-### 16.3 Notebook `notebooks/colab_train.ipynb`
+```
+voice-assets.tar.gz
+├── sources/onnx_hubert_new/model.onnx     # ContentVec
+├── sources/vits_dec/                      # dec ĐÃ export (+ ref_*.npz để verify)
+├── sources/features/422-122949-0031.npy   # features của wav mẫu
+└── samples/422-122949-0031.wav
+```
 
-Các bước: cài rustup → clone → **tải Release asset** → `cargo build --release` →
-`python scripts/export_vits_dec.py --hps scripts/ljs_base.json` → `embed` sinh
-features → `voice-train --example train_adapter`. Chạy **CPU** (Colab chưa hỗ trợ
-GPU; xem §16.4).
+→ Colab chỉ cần tải 1 file, **không cần PyTorch** (export đã làm trong CI).
+
+### 16.2.1 GitHub Actions
+
+| Workflow | Kích hoạt | Việc |
+|---|---|---|
+| `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
+| `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo trọng số gốc (Drive + HF) → `export_vits_dec.py` → `embed` sinh features mẫu → đóng gói `voice-assets.tar.gz` → publish Release. |
+
+> CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
+> khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.
+
+### 16.3 Script dùng chung
+
+| Script | Việc |
+|---|---|
+| `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz` từ Release, giải nén vào repo → có `sources/`. |
+| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — build → (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`). |
+
+### 16.4 Notebook `notebooks/colab_train.ipynb`
+
+Cài rustup → clone → `scripts/fetch_assets.sh` → `scripts/run_training.sh` → tải
+`test_output.wav` + `adapter.bpk` về. Chạy **CPU** (Colab chưa hỗ trợ GPU; xem §16.5).
 
 > ⚠️ **Thứ tự bắt buộc:** `voice-hubert/build.rs` **cần**
 > `sources/onnx_hubert_new/model.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
-> phải tải asset **trước** khi build. `voice-f0/build.rs` cũng vậy nhưng notebook
-> này không build `voice-f0`.
+> phải `fetch_assets` **trước** khi build — `run_training.sh` đã ép thứ tự này.
+> `voice-f0/build.rs` cũng vậy nhưng luồng này không build `voice-f0`.
 
 `scripts/ljs_base.json` là bản sao nhỏ của `sources/vits/configs/ljs_base.json` để
-export không cần cả cây mã nguồn VITS.
+workflow export không cần cả cây mã nguồn VITS.
 
-### 16.4 Chi phí trên Colab (CPU)
+### 16.5 Chi phí trên Colab (CPU)
 
 Colab free ~2 core; laptop dev ~10 core với `dec` forward+backward ở 589 frame
 ≈ 33 s/bước. Ước lượng Colab CPU:

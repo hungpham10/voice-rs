@@ -1,0 +1,23 @@
+name: ci
+
+# Chỉ chạy UNIT TEST. Không tải asset nặng, không build các crate cần ONNX lúc build
+# (`voice-hubert`, `voice-f0` có `build.rs` exit(1) nếu thiếu model) — nên CI chỉ
+# kiểm 4 crate thuần logic.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit tests (voice-lib, voice-mel, voice-models, voice-train)
+        run: cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train
