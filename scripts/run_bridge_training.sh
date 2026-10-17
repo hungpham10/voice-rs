@@ -53,6 +53,6 @@ run_bin voice-train voice-train -- train bridge \
 echo "== 3/3 eval (cổng PASS/FAIL) =="
 run_bin voice-train voice-train -- eval \
   --val-manifest "$VAL" --adapter "$OUT/adapter_best.bpk" \
-  --out-report "$OUT/report.csv" --device "$DEVICE"
+  --out-report "$OUT/report.csv" --out-json "$OUT/summary.json" --device "$DEVICE"
 
-echo "✔ xong: adapter + report ở $OUT"
+echo "✔ xong: adapter + history.csv + report.csv + summary.json ở $OUT"

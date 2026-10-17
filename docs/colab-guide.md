@@ -129,10 +129,12 @@ DATA=/content/data/vivos STEPS=1500 SEG=86 BATCH=8 ./scripts/run_bridge_training
 
 `run_bridge_training.sh` tự: sinh features (`embed_batch`) → `train bridge` →
 `eval` (thoát **mã 1** nếu FAIL). Kết quả ở `$DATA/bridge/`: `adapter_best.bpk`,
-`adapter.bpk`, `report.csv`.
+`adapter.bpk`, `history.csv`, `report.csv`, `summary.json`.
 
 Đọc chỉ số `eval`: `mel-L1` (càng nhỏ càng tốt), `speaker_gap` (nhỏ = công bằng giữa
-giọng), `drift` (phải ≈ 0), RMS (bắt audio im lặng/nổ). Xem `docs/architecture.md`
+giọng), `drift` (phải ≈ 0), RMS (bắt audio im lặng/nổ). Để so giữa các version, giữ
+`summary.json` của version trước rồi chạy eval với `--baseline summary.json`
+(`--max-regression 0.05`) — thoái lui > 5% sẽ FAIL. Xem `docs/architecture.md`
 §13.6.4g.
 
 ---

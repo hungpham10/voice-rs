@@ -92,6 +92,15 @@ struct EvalArgs {
     /// Ghi báo cáo từng câu ra CSV.
     #[arg(long)]
     out_report: Option<PathBuf>,
+    /// Ghi bản tóm tắt (metrics + gate + pass) ra JSON — dùng làm golden cho lần sau.
+    #[arg(long)]
+    out_json: Option<PathBuf>,
+    /// So với `summary.json` của version trước; thoái lui quá ngưỡng = FAIL.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
+    /// Ngưỡng thoái lui tương đối so với baseline (mặc định 5%).
+    #[arg(long, default_value_t = 0.05)]
+    max_regression: f64,
     /// Ghi audio sinh cho từng câu vào thư mục này.
     #[arg(long)]
     out_audio_dir: Option<PathBuf>,
@@ -161,6 +170,7 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     println!("val mel-L1 tốt nhất: {:.5}", s.best_val);
     println!("adapter cuối: {}", s.adapter_path.display());
     println!("adapter tốt nhất: {}", s.best_path.display());
+    println!("lịch sử: {}", s.history_path.display());
     if !(ratio.is_finite() && ratio > 1.0) {
         eprintln!("⚠️  loss KHÔNG giảm — kiểm dữ liệu/lr (chưa tính là FAIL, chạy `eval`)");
     }
@@ -251,6 +261,53 @@ fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 
     let (pass, fails) = gate.check(&report);
+    let mut fails = fails;
+
+    // Baseline: so với summary.json của version trước (golden).
+    let mut baseline_val: Option<f64> = None;
+    if let Some(path) = &a.baseline {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("mở baseline {} lỗi: {e}", path.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("baseline {} không phải JSON: {e}", path.display()))?;
+        let b = v
+            .get("mean_mel_l1")
+            .and_then(|x| x.as_f64())
+            .ok_or_else(|| format!("baseline {} thiếu `mean_mel_l1`", path.display()))?;
+        baseline_val = Some(b);
+        match eval::regression_fail(report.mean_mel_l1, b, a.max_regression) {
+            Some(msg) => fails.push(msg),
+            None => println!("so baseline: mel_l1 {:.5} ≤ {:.5} (ok)", report.mean_mel_l1, b),
+        }
+    }
+
+    let pass = pass && fails.is_empty();
+
+    // Tóm tắt JSON (golden cho lần sau; cả khi FAIL để còn soi).
+    if let Some(path) = &a.out_json {
+        let summary = serde_json::json!({
+            "mean_mel_l1": report.mean_mel_l1,
+            "speaker_gap": report.speaker_gap,
+            "min_rms": report.min_rms,
+            "max_rms": report.max_rms,
+            "drift": report.drift,
+            "all_finite": report.all_finite,
+            "n_utt": report.per_utt.len(),
+            "n_speakers": report.per_speaker.len(),
+            "baseline_mel_l1": baseline_val,
+            "max_regression": a.max_regression,
+            "pass": pass,
+            "fails": fails,
+        });
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(path, serde_json::to_string_pretty(&summary)?)?;
+        println!("đã ghi tóm tắt: {}", path.display());
+    }
+
     println!();
     if pass {
         println!("✅ PASS — đạt cổng chất lượng");

@@ -271,6 +271,24 @@ impl Gate {
     }
 }
 
+/// So sánh với một baseline (version trước): `Some(lý do)` nếu thoái lui quá
+/// `max_rel` (tương đối). Dùng `summary.json` của lần eval trước làm golden.
+///
+/// Bỏ qua khi giá trị không hữu hạn hoặc baseline ≤ 0 (không có mốc so).
+pub fn regression_fail(current: f64, baseline: f64, max_rel: f64) -> Option<String> {
+    if !current.is_finite() || !baseline.is_finite() || baseline <= 0.0 {
+        return None;
+    }
+    if current > baseline * (1.0 + max_rel) {
+        Some(format!(
+            "thoái lui so với baseline: mel_l1 {current:.5} > {:.5} × (1+{max_rel})",
+            baseline
+        ))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +343,14 @@ mod tests {
         );
         // mean 0.2, (0.3-0.1)/0.2 = 1.0
         assert!((r.speaker_gap - 1.0).abs() < 1e-9, "gap {}", r.speaker_gap);
+    }
+
+    #[test]
+    fn regression_detects_worsening() {
+        assert!(regression_fail(0.12, 0.10, 0.05).is_some()); // +20% > 5%
+        assert!(regression_fail(0.105, 0.10, 0.05).is_none()); // +5% không vượt
+        assert!(regression_fail(0.08, 0.10, 0.05).is_none()); // tốt hơn
+        assert!(regression_fail(0.10, 0.0, 0.05).is_none()); // baseline vô nghĩa
+        assert!(regression_fail(f64::NAN, 0.1, 0.05).is_none());
     }
 }
