@@ -42,16 +42,16 @@ if [ ! -f "$TRAIN" ] || [ ! -f "$VAL" ]; then
 fi
 
 echo "== 1/3 features ContentVec (embed_batch) =="
-run_bin embed_batch voice-hubert -- --manifest "$TRAIN" --skip-existing
-run_bin embed_batch voice-hubert -- --manifest "$VAL" --skip-existing
+run_bin embed_batch voice-hubert --manifest "$TRAIN" --skip-existing
+run_bin embed_batch voice-hubert --manifest "$VAL" --skip-existing
 
 echo "== 2/3 train bridge (SEG=${SEG} BATCH=${BATCH} STEPS=${STEPS}) =="
-run_bin voice-train voice-train -- train bridge \
+run_bin voice-train voice-train train bridge \
   --train-manifest "$TRAIN" --val-manifest "$VAL" --out-dir "$OUT" \
   --seg "$SEG" --batch "$BATCH" --steps "$STEPS" --lr "$LR" --device "$DEVICE"
 
 echo "== 3/3 eval (cổng PASS/FAIL) =="
-run_bin voice-train voice-train -- eval \
+run_bin voice-train voice-train eval \
   --val-manifest "$VAL" --adapter "$OUT/adapter_best.bpk" \
   --out-report "$OUT/report.csv" --out-json "$OUT/summary.json" --device "$DEVICE"
 
