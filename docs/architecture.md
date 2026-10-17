@@ -2076,10 +2076,15 @@ Tải bằng `https://github.com/hungpham10/voice-rs/releases/download/assets-v1
 
 ### 16.3 Notebook `notebooks/colab_train.ipynb`
 
-Các bước: cài rustup → clone → `cargo build --release` → tải Release asset →
+Các bước: cài rustup → clone → **tải Release asset** → `cargo build --release` →
 `python scripts/export_vits_dec.py --hps scripts/ljs_base.json` → `embed` sinh
 features → `voice-train --example train_adapter`. Chạy **CPU** (Colab chưa hỗ trợ
 GPU; xem §16.4).
+
+> ⚠️ **Thứ tự bắt buộc:** `voice-hubert/build.rs` **cần**
+> `sources/onnx_hubert_new/model.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
+> phải tải asset **trước** khi build. `voice-f0/build.rs` cũng vậy nhưng notebook
+> này không build `voice-f0`.
 
 `scripts/ljs_base.json` là bản sao nhỏ của `sources/vits/configs/ljs_base.json` để
 export không cần cả cây mã nguồn VITS.
