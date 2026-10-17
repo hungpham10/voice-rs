@@ -2409,6 +2409,7 @@ lúc chạy).
 
 | Script | Việc |
 |---|---|
+| `scripts/setup.sh [--f0] [--no-bin] [--no-deps]` | **Cài một lệnh**: model (`sources/`) + binary (`bin/`) + phụ thuộc Python; idempotent. Colab dùng thẳng, máy dev thêm `--no-bin`. |
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
 | `scripts/fetch_bin.sh [tag]` | tải binary đã build (`embed`, `embed_batch`, `voice-train`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |

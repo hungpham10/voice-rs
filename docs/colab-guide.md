@@ -73,14 +73,15 @@ cd /content
 git clone https://github.com/hungpham10/voice-rs.git
 cd voice-rs
 
-# 1) model (ContentVec ONNX + dec) — verify SHA256SUMS
-./scripts/fetch_assets.sh                 # tag mặc định: assets-v1
-# ./scripts/fetch_assets.sh --f0          # thêm rmvpe_f0.onnx nếu cần voice-f0
+# 1) CÀI MỘT LỆNH: model (sources/) + binary (bin/) + phụ thuộc Python
+./scripts/setup.sh
 
-# 2) binary train/validate (Linux x86_64) → ./bin/
-./scripts/fetch_bin.sh                    # tag mặc định: v2.2.10
+# —— hoặc làm từng bước ——
+# ./scripts/fetch_assets.sh                 # model, verify SHA256SUMS (tag assets-v1)
+# ./scripts/fetch_assets.sh --f0            # thêm rmvpe_f0.onnx nếu cần voice-f0
+# ./scripts/fetch_bin.sh                    # binary Linux x86_64 → ./bin/ (tag v2.2.10)
 
-# 3) validation + training
+# 2) validation + training
 SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh
 ```
 

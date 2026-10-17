@@ -42,11 +42,13 @@ scripts/               nạp model/binary + chạy huấn luyện (Rust/shell; c
 Cần Rust stable. Trọng số tải riêng (xem dưới).
 
 ```bash
+./scripts/setup.sh --no-bin    # MỘT lệnh: model (sources/) + phụ thuộc Python (máy dev bỏ qua binary)
 cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạy đúng bộ này
-
-./scripts/fetch_assets.sh          # tải bundle model từ Release assets-v1 → sources/
-./scripts/run_training.sh          # validation (verify_dec) → training adapter (tự build nếu chưa có binary)
+./scripts/run_training.sh      # validation (verify_dec) → training adapter (tự build nếu chưa có binary)
 ```
+
+> Trên Colab (không có Rust) dùng `./scripts/setup.sh` — tự tải thêm binary Linux
+> vào `./bin/`. Xem [`docs/colab-guide.md`](docs/colab-guide.md).
 
 ## Model (không nằm trong git)
 
@@ -76,7 +78,7 @@ Trên Colab **không cần cài Rust hay biên dịch**: binary cho Linux x86_64
 lên GitHub Release khi push một tag phiên bản.
 
 ```bash
-./scripts/fetch_bin.sh              # tải về ./bin/{embed,voice-train,verify_dec}
+./scripts/setup.sh                  # một lệnh: model + phụ thuộc Python + binary → ./bin/
 ./scripts/run_training.sh           # dùng luôn binary, không đụng cargo
 ```
 
