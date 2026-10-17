@@ -3,8 +3,10 @@
 Ghi chú kỹ thuật cho voice conversion viết bằng Rust + Burn.
 
 **Runtime 100% Rust.** Trọng số và ground truth đã được export **một lần** rồi đóng
-băng trên HuggingFace; repo **không có Python trong pipeline** (còn `scripts/screen_onnx.py`
-là công cụ dev, chạy tay khi nạp một ONNX mới). Binary cuối cùng không cần Python.
+băng trên HuggingFace. Python **chỉ** còn là công cụ dev chạy tay, **không** nằm
+trong binary hay đường suy luận: `scripts/screen_onnx.py` (sàng lọc ONNX khi nạp
+model mới) và `scripts/data/` (tải + chia dataset — §13.6.4). Binary cuối cùng
+không cần Python.
 
 > **Chỗ chưa chốt** được đánh dấu 🔶. Đó là những câu hỏi cần đo, không phải
 > những chỗ còn suy nghĩ. Mọi thứ khác trong tài liệu này đã kiểm bằng số hoặc
@@ -542,7 +544,7 @@ cửa sổ ±4 quanh argmax, `cents_mapping = 20·arange(360) + 1997.3794`, và
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ xong, 🔶 chờ chốt §13.4 |
 | `voice-models` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
 | `voice-lib` | **Thư viện dùng chung**: `cc` (tách dấu câu, chia frame, `.srt`) + `vc` (`Adapter` Burn P1, nội suy frame rate, resample PCM) | 🟡 logic + `Adapter` xong (**43 unit test**) |
-| `voice-train` | **Huấn luyện + validate**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`, vòng overfit adapter | 🟡 `src/bin/train_adapter` chạy được, loss giảm — §13.6.2 |
+| `voice-train` | **Huấn luyện + validate**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`, vòng overfit adapter | 🟡 `src/bin/train_adapter` chạy được, loss giảm — §13.6.2 · 🔶 gom thành subcommand `clap` (`dataset`/`embed`/`train`/`eval`) — §13.6.4 |
 
 `voice-lib` là mục đích cho **bên ngoài** dùng; **training + validate** nằm ở
 `voice-train` — `voice-lib` không được phụ thuộc `sources/` hay build
@@ -561,7 +563,7 @@ Phân tách từng tầng cho phép verify độc lập với PyTorch — điề
 | `voice-index` | 247 dòng | FAISS/RVC, VITS không có retrieval |
 | `voice-cc` + `voice-vc` | 2 crate | gộp vào `voice-lib` |
 
-Tổng: **8 crate → 5**, bỏ ~13,7k dòng chết. Hệ quả phụ đắt giá: `voice-models`
+Tổng: gom về **6 crate**, bỏ ~13,7k dòng chết. Hệ quả phụ đắt giá: `voice-models`
 **không còn cần** `sources/vocoder/generator.onnx` để build.
 
 > `MelConfig::speecht5()` + `verify_speecht5` **giữ lại** ở `voice-mel` — chúng là
@@ -790,6 +792,9 @@ Bản khác export chưa chắc đã sạch op — vẫn phải chạy `screen_o
 | Script | Vai trò |
 |---|---|
 | `scripts/screen_onnx.py` | sàng lọc ONNX trước khi import (§7) — **công cụ dev**, chỉ chạy tay khi nạp một ONNX mới |
+| `scripts/data/prepare.py` | tải + resample + lọc dataset → manifest (§13.6.4c) |
+| `scripts/data/split.py` | chia train/validate theo `--val-ratio` → `train.csv`/`val.csv` (§13.6.4e) |
+| `scripts/data/audio2features.py` | (tuỳ chọn) batch ContentVec thay `embed` khi cần GPU |
 | ~~`scripts/export_vits_dec.py`~~ | 🗑️ đã xoá — trọng số `dec` đã export MỘT LẦN rồi đóng băng trên HF (§16.2) |
 | ~~`scripts/ref_mel.py`~~ | 🗑️ đã xoá — `sources/ref_mel.npy` là ground truth đã đóng băng |
 | ~~`scripts/check_ref_mel.py`~~ | 🗑️ đã xoá — chỉ dùng để kiểm chứng `ref_mel.py` một lần |
@@ -1337,6 +1342,9 @@ phút** audio giọng đích là đủ (khác hẳn 6.84 s hiện có — xem §
 | `voice-train` | `train_bridge_multi` (batch cân bằng theo speaker) + `train_timbre` (chỉ 1 timbre) |
 | dữ liệu | bước tải + tách VIVOS/CV thành cặp `(wav, feats)` theo speaker |
 
+> 📋 Kế hoạch chi tiết cho **Luồng 1** (subcommand `clap`, data Python, hợp đồng CSV,
+> chia train/validate, gate `eval`) nằm ở **§13.6.4**.
+
 **Chi phí (Colab CPU).** Pha A nặng hơn P1 (nhiều giọng) nhưng cùng cấu trúc
 `SEG`-chunk: ~vài giờ cho một tập nhỏ (5–8 giọng). Pha B rất nhẹ (chỉ timbre) — hàng
 chục phút.
@@ -1351,9 +1359,125 @@ chục phút.
 - **§13.12:** 1→1 vẫn giữ; Pha A + B chỉ là cách *tổ chức việc huấn* để nhiều giọng
   dùng chung bridge, mỗi giọng một timbre nhỏ.
 
-⚠️ **Trạng thái 🔶:** đây là **thiết kế đã bàn, chưa code.** Thứ tự đề xuất: (1) Pha
-B trên bridge P1 hiện có (chứng minh timbre học được); (2) tách Pha A khi có nhiều
-giọng.
+⚠️ **Trạng thái 🔶:** đây là **thiết kế đã bàn, chưa code.** Thứ tự đã chốt lại:
+làm **Luồng 1** (Pha A — bridge dùng chung, kế hoạch chi tiết §13.6.4) **trước**;
+**Luồng 2** (Pha B — timbre: kNN retrieval / FiLM) **để sau**, khi Luồng 1 đã có
+`bridge.best.bpk` để đo.
+
+#### 13.6.4 🔶 Kế hoạch "Luồng 1" — dữ liệu + huấn luyện bridge chung
+
+Chốt tiến trình: làm **Luồng 1** trước — *bridge nội dung dùng chung, bỏ timbre*.
+**Luồng 2** (timbre: kNN retrieval kiểu RVC/Applio + FiLM, §13.6.3) **để sau**, khi
+Luồng 1 đã ra `bridge.best.bpk` để đo.
+
+##### a) Một bin, nhiều subcommand (`clap`)
+
+Nhiều việc rời (chia data, cache features, huấn luyện, chấm điểm) nên gom vào **một
+bin** dùng `clap` derive; thay vì nhiều bin rời như `train_adapter` hiện nay.
+
+```
+voice-train
+├── dataset split   # (gọi Python, mục c) chia theo tỉ lệ cấu hình trên command line
+├── embed           # cache ContentVec 768@50Hz (.npy) theo manifest
+├── train bridge    # đóng băng dec, chỉ học Linear(768→192)
+└── eval            # chấm điểm + gate (mục g) → exit code 1 khi FAIL
+```
+
+Các bin cũ (`src/bin/train_adapter.rs`) **giữ nguyên** cho tới khi subcommand tương
+đương chạy được, rồi mới bỏ.
+
+##### b) Chọn backend — `--device cpu|cuda|metal`
+
+- Burn 0.22: `Backend` **không** là type param của `Tensor` (§11) — device chọn lúc
+  runtime (`Device::default()` vs `.autodiff()`). Nhưng **backend** (CPU/CUDA/Metal)
+  lại chọn lúc **compile** qua feature của crate `burn`. Nên `--device` là *ánh xạ
+  compile-time*: build có feature tương ứng mới chạy được; thiếu thì **báo lỗi rõ**,
+  không panic mơ hồ.
+- Mặc định **`cpu`** — khớp Colab, và `cargo-dist` hiện chỉ ship
+  `x86_64-unknown-linux-gnu` CPU (§16.2.2).
+- GPU (`--device cuda`) cần **build riêng** có feature `cuda` + CUDA toolkit; đây là
+  target phân phối mới, **ngoài phạm vi** Luồng 1. Colab chưa có GPU (§16.5).
+- Sanity: chạy 5 bước trên hai backend phải cho loss tương đương (khi có GPU để đối
+  chiếu) — đây là một *gate* (mục g), không phải suy đoán.
+
+##### c) Data bằng Python — `scripts/data/` (công cụ dev)
+
+> ⚠️ **Đính chính phạm vi:** đầu tài liệu từng ghi "không có Python trong pipeline".
+> **Đường runtime/suy luận vẫn 100% Rust** — không đổi. Chỉ **khâu chuẩn bị dữ liệu**
+> dùng Python (cùng loại với `scripts/screen_onnx.py`), vì tải + nhiều định dạng
+> dataset viết lại bằng Rust là việc lớn mà không thuộc sản phẩm.
+
+| Script | Việc |
+|---|---|
+| `scripts/data/prepare.py --dataset vivos` | tải (HF `datasets`) + resample 16 kHz mono + lọc (thời lượng, clip) |
+| `scripts/data/split.py --manifest … --val-ratio 0.1` | chia train/validate, ghi `train.csv` / `val.csv` — **tỉ lệ cấu hình trên command line** |
+| `scripts/data/audio2features.py …` | (tuỳ chọn) batch ContentVec, thay `embed` Rust khi cần GPU |
+| `scripts/data/requirements.txt` | pin (`datasets`, `soundfile`, `pandas`) |
+
+**Nhiều dataset:** mỗi bộ một adapter nhỏ (`vivos.py`, `common_voice.py`,
+`vivvoice.py`) — tất cả **bắn ra cùng định dạng CSV** (mục d). Rust **không** biết
+đặc thù dataset nào.
+
+##### d) Hợp đồng CSV — ranh giới Python ↔ Rust
+
+```
+split,speaker_id,utt_id,wav_path,feats_path,duration
+```
+
+Rust **chỉ** đọc CSV này. Thêm dataset mới = thêm file Python, **không** sửa Rust.
+Có **contract test** trong CI: một manifest mẫu (nhỏ) phải parse được; đổi header ở
+Python mà quên Rust thì CI bắt ngay.
+
+##### e) Chia train / validate
+
+- Mặc định chia **theo câu, trong từng speaker** (không chia theo speaker), tỉ lệ
+  `--val-ratio` (mặc định `0.1`), bằng băm `sha256(utt_id)` **cố định** → chạy lại
+  cho cùng kết quả, không cần lưu seed.
+
+##### f) Huấn luyện `train bridge`
+
+- **Chỉ `Linear(768→192)` học**; `dec` (14.33 M) **đóng băng** — y hệt `train_adapter`
+  §13.6.2, giờ mở rộng cho nhiều câu/nhiều giọng.
+- **Batch cân bằng theo speaker** (con trỏ round-robin): mỗi batch lấy đều các giọng
+  → gradient về bridge là trung bình → đây chính là cơ chế "quên timbre" của Pha A
+  (§13.6.3).
+- `--seg` cắt đoạn ngẫu nhiên; loss `L1(mel_gen, mel_target)` trung bình batch; Adam.
+- **Validate** mỗi `--val-every` bước trên `val.csv`; giữ `bridge.best.bpk` (theo
+  val) + `bridge.last.bpk` + `history.csv`. Seed cố định.
+
+##### g) `eval` — gate chất lượng (kiểu integration-test / benchmark)
+
+Đây là "bài kiểm tra chất lượng model sau huấn luyện" — chạy tự động, cho ra
+`PASS/FAIL`, không phải nhìn bằng mắt.
+
+| Chỉ số | Cách chấm | Bắt lỗi gì |
+|---|---|---|
+| `mel-L1 val` | trung bình toàn bộ `val.csv` | chất lượng tổng thể |
+| `drift` | eval 2 lần trên cùng checkpoint, seed cố định → **phải bằng 0** | rò rỉ ngẫu nhiên / phụ thuộc thứ tự |
+| `per-speaker gap` | `max / median` giữa các speaker | một giọng bị "bỏ rơi" (batch không cân) |
+| `audio sanity` | RMS trong biên; thời lượng `= T·256` | `dec` hỏng / mất biên độ |
+| `speaker-similarity` | cosine(features(audio gen), features(giọng đích)) | timbre — **chỉ có sau Luồng 2** |
+
+- `--gate gate.toml` chứa ngưỡng → in `PASS/FAIL` và **trả exit code 1 khi FAIL** →
+  dùng được trong CI và trong script Colab.
+- **`eval_set/` golden** (clip chọn theo hash, cố định) để so giữa các version.
+
+##### h) Thứ tự triển khai
+
+| Mốc | Nội dung |
+|---|---|
+| **A** | `clap` subcommand + `scripts/data/` (`prepare`, `split --val-ratio`) + CSV + contract test |
+| **B** | `embed --manifest` (batch, chạy lại bỏ qua file đã có) |
+| **C** | `train bridge` (batch cân bằng, seed, checkpoint best) + `--device` |
+| **D** | `eval` + `gate.toml` + `eval_set/` golden |
+| **E** | script Colab `run_bridge_training.sh` + cập nhật `architecture.md`/`colab-guide.md` |
+| **F** | *(sau)* Luồng 2 — kNN retrieval / FiLM (§13.6.3) |
+
+##### i) Giới hạn để Colab CPU chạy nổi
+
+- Cache features bằng ContentVec CPU ~ thời gian thực → **không** lấy hết VIVOS
+  (15 h). Mặc định chọn **8 speaker × ~20 câu** (~40 phút tiếng).
+- Huấn luyện: `SEG=86` + batch 4 ≈ **1.5–2 h/250 bước** (cùng mức §16.5).
 
 ### 13.7 192-D đó là hidden, không phải `z`
 
@@ -2193,7 +2317,8 @@ pull duy nhất (kèm sha256 + size để verify):
 > upload lên HF riêng (đổi tên `model.onnx` → `contentvec_768l12.onnx`).
 >
 > Không còn `pretrained_ljs.pth` trên HF và **không còn Python/torch** ở bất kỳ đâu
-> trong pipeline: `vits_ljs_dec/*.npy` là model `dec` đóng băng. Muốn dec từ checkpoint
+> trong **đường model / suy luận**: `vits_ljs_dec/*.npy` là model `dec` đóng băng.
+> (Python chỉ còn ở khâu *chuẩn bị dữ liệu* — §16.6.) Muốn dec từ checkpoint
 > khác phải viết converter mới (Rust) — xem §12.
 
 Từ các model trên, workflow đóng gói **2 bundle chỉ-model** rồi publish lên Release:
@@ -2244,6 +2369,8 @@ từ `sources/vits_ljs_dec/*.npy` lúc chạy).
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
 | `scripts/fetch_bin.sh [tag]` | tải binary đã build (`embed`, `train_adapter`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
 | `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`); ưu tiên `./bin/`, thiếu thì `cargo run`. |
+| `scripts/run_bridge_training.sh` 🔶 | *(kế hoạch, §13.6.4)* dataset → features → `train bridge` → `eval` (gate PASS/FAIL); ưu tiên `./bin/`. |
+| `scripts/data/*.py` 🔶 | *(kế hoạch, §13.6.4c)* công cụ dev tải + chia dataset → CSV cho Rust đọc. |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`
 
@@ -2270,3 +2397,18 @@ Colab free ~2 core; laptop dev ~10 core với `dec` forward+backward ở 589 fra
 
 → Notebook mặc định `SEG=86 STEPS=250`. Muốn nhanh hơn đáng kể phải làm đường GPU
 (`burn-cuda`) — công việc riêng, chưa nằm trong phạm vi này.
+
+### 16.6 🔶 Chuẩn bị dữ liệu — Python (dev), không phải runtime
+
+Kế hoạch Luồng 1 (§13.6.4) thêm một khâu **chạy tay bằng Python** ở *trước* đường
+Rust: tải + chia dataset → `train.csv`/`val.csv`. Rust (subcommand `embed`/`train`/
+`eval`) chỉ đọc CSV theo hợp đồng §13.6.4d.
+
+| | Ở đâu | Vì sao |
+|---|---|---|
+| Runtime / suy luận | **100% Rust** | không đổi |
+| Chuẩn bị dữ liệu | `scripts/data/*.py` (dev) | tải + nhiều định dạng dataset — cùng loại với `scripts/screen_onnx.py` |
+| CI | thêm **contract test** trên CSV mẫu | đổi cột ở Python không làm hỏng Rust lúc runtime |
+
+Menu dataset khảo sát (chi tiết §13.6.3): VIVOS (16 kHz mono), Common Voice `vi`
+(CC0), viVoice (24 kHz → resample 16 k).
