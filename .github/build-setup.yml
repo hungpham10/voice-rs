@@ -3,6 +3,6 @@
 # codegen, and turns on weight embedding so the shipped `embed` binary is
 # self-contained (no `.bpk` file needed at runtime).
 - name: Fetch model assets (ONNX)
-  run: ./scripts/fetch_assets.sh
+  run: ./scripts/fetch_assets.sh --f0
 - name: Embed ContentVec weights into the `embed` binary
   run: echo "VOICE_EMBED_WEIGHTS=1" >> "$GITHUB_ENV"
