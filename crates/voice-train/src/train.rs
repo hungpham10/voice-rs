@@ -46,6 +46,7 @@ pub struct BridgeSummary {
     pub params: usize,
     pub adapter_path: PathBuf,
     pub best_path: PathBuf,
+    pub history_path: PathBuf,
 }
 
 /// Huấn luyện cầu nối. `device` là CPU/… trước autodiff (hàm tự bật autodiff).
@@ -105,11 +106,14 @@ pub fn train_bridge(
     std::fs::create_dir_all(&cfg.out_dir)?;
     let adapter_path = cfg.out_dir.join("adapter.bpk");
     let best_path = cfg.out_dir.join("adapter_best.bpk");
+    let history_path = cfg.out_dir.join("history.csv");
 
     let mut first = f64::NAN;
     let mut last = f64::NAN;
     let mut best_val = f64::INFINITY;
     let mut best_adapter = adapter.clone();
+    // (step, train_mel_l1, val_mel_l1) — val chỉ có ở bước đo.
+    let mut history: Vec<(usize, f64, Option<f64>)> = Vec::with_capacity(cfg.steps);
 
     for step in 0..cfg.steps {
         let mut feats_host: Vec<f32> = Vec::with_capacity(cfg.batch * c * t_h_seg);
@@ -153,7 +157,7 @@ pub fn train_bridge(
         adapter = optim.step(cfg.lr, adapter, grads);
 
         let do_val = cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
-        if do_val {
+        let val_now = if do_val {
             let report = eval::evaluate(&adapter, &gen, val_ds, &mel_cfg, &basis, &device)?;
             let improved = report.mean_mel_l1 < best_val;
             if improved {
@@ -166,9 +170,16 @@ pub fn train_bridge(
                 report.mean_mel_l1,
                 if improved { "  ← tốt nhất" } else { "" }
             );
-        } else if step % 25 == 0 || step + 1 == cfg.steps {
-            println!("step {:>4}  train mel-L1 = {lv:.5}", step + 1);
-        }
+            Some(report.mean_mel_l1)
+        } else {
+            if step % 25 == 0 || step + 1 == cfg.steps {
+                println!("step {:>4}  train mel-L1 = {lv:.5}", step + 1);
+            }
+            None
+        };
+
+        history.push((step + 1, lv, val_now));
+        write_history(&history_path, &history)?;
     }
 
     adapter.save(&adapter_path)?;
@@ -183,5 +194,22 @@ pub fn train_bridge(
         params,
         adapter_path,
         best_path,
+        history_path,
     })
+}
+
+/// Ghi lịch sử huấn luyện (ghi lại toàn bộ mỗi lần gọi — đủ nhỏ để đơn giản).
+fn write_history(
+    path: &std::path::Path,
+    rows: &[(usize, f64, Option<f64>)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut s = String::from("step,train_mel_l1,val_mel_l1\n");
+    for (step, train, val) in rows {
+        match val {
+            Some(v) => s.push_str(&format!("{step},{train:.6},{v:.6}\n")),
+            None => s.push_str(&format!("{step},{train:.6},\n")),
+        }
+    }
+    std::fs::write(path, s)?;
+    Ok(())
 }

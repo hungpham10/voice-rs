@@ -7939,6 +7939,8 @@ dependencies = [
  "burn",
  "clap",
  "hound",
+ "serde",
+ "serde_json",
  "voice-lib",
  "voice-mel",
  "voice-models",

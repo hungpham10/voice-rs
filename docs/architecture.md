@@ -1458,13 +1458,12 @@ Python mà quên Rust thì CI bắt ngay.
   (§13.6.3).
 - `--seg` cắt đoạn ngẫu nhiên (tự co theo câu ngắn nhất để batch đều kích thước);
   loss `L1(mel_gen, mel_target)` trung bình batch; Adam.
-- **Validate** mỗi `--val-every` bước trên `val.csv`; ghi `adapter_best.bpk` (theo val)
-  và `adapter.bpk` (cuối). Seed cố định (`--seed`, mặc định 42); RNG nội bộ xorshift
-  (không thêm dependency).
+- **Validate** mỗi `--val-every` bước trên `val.csv`; ghi `history.csv`
+  (`step,train_mel_l1,val_mel_l1`), `adapter_best.bpk` (theo val) và `adapter.bpk`
+  (cuối). Seed cố định (`--seed`, mặc định 42); RNG nội bộ xorshift (không thêm
+  dependency).
 - Cờ: `--train-manifest --val-manifest --dec-dir --out-dir --seg --batch --steps
   --lr --val-every --seed --device`.
-
-> *Chưa làm:* `history.csv` và `bridge.last.bpk` — hiện chỉ adapter cuối + tốt nhất.
 
 ##### g) `eval` — gate chất lượng (kiểu integration-test / benchmark)
 
@@ -1482,10 +1481,13 @@ Python mà quên Rust thì CI bắt ngay.
 - `--gate gate.toml` chứa ngưỡng (`key = value`, tập con TOML; khoá lạ = lỗi) →
   in `PASS/FAIL` và **trả exit code 1 khi FAIL** → dùng được trong CI và script Colab.
   Khoá: `max_mel_l1`, `max_speaker_gap`, `min_rms`, `max_rms`, `max_drift`.
-- `--out-report report.csv` (chỉ số từng câu) và `--out-audio-dir` (nghe thử) là tuỳ chọn.
+- `--out-report report.csv` (chỉ số từng câu), `--out-json summary.json` (tóm tắt
+  metrics + `pass`) và `--out-audio-dir` (nghe thử) là tuỳ chọn.
 
-> *Chưa làm:* bộ **`eval_set/` golden** cố định để so giữa các version — hiện dùng
-> trực tiếp `val.csv` của mỗi dataset.
+**Golden theo version (thay `eval_set/`):** `--out-json summary.json` lưu bản tóm tắt;
+lần eval sau dùng `--baseline summary.json --max-regression 0.05` để **FAIL nếu
+mel-L1 thoái lui > 5%** so với version trước. Đây là cách so version gọn, không phải
+committed audio nặng — "golden" = cặp `(val.csv cố định, summary.json)`.
 
 ##### h) Thứ tự triển khai (tiến độ)
 
@@ -1494,7 +1496,7 @@ Python mà quên Rust thì CI bắt ngay.
 | **A** | `clap` subcommand + `scripts/data/` (`prepare`, `split --val-ratio`) + CSV + contract test | ✅ |
 | **B** | `embed_batch --manifest` (batch, chạy lại bỏ qua file đã có) | ✅ |
 | **C** | `train bridge` (batch cân bằng, seed, checkpoint best) + `--device` | ✅ |
-| **D** | `eval` + gate (`key = value`) → exit 1 khi FAIL | ✅ (thiếu `eval_set/` golden) |
+| **D** | `eval` + gate (`key = value`) + `summary.json`/`--baseline` → exit 1 khi FAIL | ✅ |
 | **E** | script Colab `run_bridge_training.sh` + cập nhật `architecture.md`/`colab-guide.md` | ✅ |
 | **F** | *(sau)* Luồng 2 — kNN retrieval / FiLM (§13.6.3) | ⏳ |
 
