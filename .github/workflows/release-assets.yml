@@ -1,8 +1,10 @@
 name: release-assets
 
-# Kéo trọng số gốc (VITS checkpoint từ Google Drive, ContentVec ONNX từ HuggingFace),
-# export `dec`, sinh features mẫu, rồi ĐÓNG GÓI thành một bundle duy nhất và publish
-# lên GitHub Release. Colab chỉ cần tải bundle này (xem `scripts/fetch_assets.sh`).
+# Kéo MODEL nguồn (ngoài git) theo `scripts/asset_checksums.txt`, verify sha256,
+# export trọng số `dec` từ `pretrained_ljs.pth`, rồi đóng gói 2 bundle CHỈ-MODEL
+# và publish lên GitHub Release. Colab tải bundle bằng `scripts/fetch_assets.sh`.
+#
+# Không đụng tới dữ liệu/ground truth — người dùng tự tải dataset khi cần.
 #
 # Chạy tay: Actions → release-assets → Run workflow.
 on:
@@ -11,12 +13,6 @@ on:
       tag:
         description: "Release tag để publish bundle"
         default: assets-v1
-      drive_folder:
-        description: "Google Drive folder chứa pretrained_ljs.pth"
-        default: "https://drive.google.com/drive/folders/1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2?usp=sharing"
-      contentvec_onnx:
-        description: "URL ContentVec ONNX (HubertModelWithFinalProj, 768)"
-        default: "https://huggingface.co/TigreGotico/voiceclonnx-rvc/resolve/main/contentvec_768l12.onnx"
 
 permissions:
   contents: write
@@ -26,39 +22,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
 
-      - name: Kéo trọng số gốc
+      - name: Kéo model nguồn + verify sha256
         run: |
           set -euo pipefail
-          mkdir -p sources/onnx_hubert_new
           pip install --quiet gdown
-          gdown --folder "${{ inputs.drive_folder }}" -O drive_dl
-          find drive_dl -name 'pretrained_ljs.pth' -exec mv {} sources/pretrained_ljs.pth \;
-          test -f sources/pretrained_ljs.pth || { echo "không tìm thấy pretrained_ljs.pth trong Drive folder"; exit 1; }
-          curl -L --fail -o sources/onnx_hubert_new/model.onnx "${{ inputs.contentvec_onnx }}"
-          ls -lh sources/pretrained_ljs.pth sources/onnx_hubert_new/model.onnx
+          grep -vE '^[[:space:]]*(#|$)' scripts/asset_checksums.txt | \
+          while read -r sha size dest url; do
+            echo "→ $dest ($size bytes)"
+            mkdir -p "sources/$(dirname "$dest")"
+            if [[ "$url" == *drive.google.com* ]]; then
+              gdown "$url" -O "sources/$dest"
+            else
+              curl -L --fail --retry 3 -o "sources/$dest" "$url"
+            fi
+            echo "$sha  sources/$dest" | sha256sum -c -
+          done
 
-      - name: Export trọng số dec + kiểm vật lý
+      - name: Export trọng số dec (torch CPU)
         run: |
           set -euo pipefail
           pip install --quiet numpy torch --index-url https://download.pytorch.org/whl/cpu
           python scripts/export_vits_dec.py --hps scripts/ljs_base.json
 
-      - name: Sinh features ContentVec cho wav mẫu
+      - name: Đóng gói bundle (chỉ model) + SHA256SUMS
         run: |
           set -euo pipefail
-          cargo run --release -p voice-hubert --example embed -- \
-            samples/422-122949-0031.wav sources/features/422-122949-0031.npy
-
-      - name: Đóng gói bundle
-        run: |
-          set -euo pipefail
-          tar -czf voice-assets.tar.gz \
-            sources/onnx_hubert_new sources/vits_dec sources/features \
-            samples/422-122949-0031.wav
-          ls -lh voice-assets.tar.gz
+          make_bundle() { # <out.tar.gz> <staging-dir> <paths...>
+            local out="$1" stage="$2"; shift 2
+            rm -rf "$stage"; mkdir -p "$stage/sources"
+            for p in "$@"; do cp -r "$p" "$stage/sources/"; done
+            ( cd "$stage" && find sources -type f | sort | xargs sha256sum > SHA256SUMS )
+            tar -czf "$out" -C "$stage" sources SHA256SUMS
+            ls -lh "$out"
+          }
+          # main: ContentVec + VITS dec (đã export + ground truth ref_*.npz để verify)
+          make_bundle voice-assets.tar.gz .pkg-main sources/onnx_hubert_new sources/vits_dec
+          # f0: RMVPE
+          make_bundle f0-assets.tar.gz .pkg-f0 sources/rmvpe.onnx
 
       - name: Publish lên Release
         env:
@@ -68,4 +69,4 @@ jobs:
           TAG="${{ inputs.tag }}"
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --notes "Packaged model assets for voice-rs."
-          gh release upload "$TAG" voice-assets.tar.gz --clobber
+          gh release upload "$TAG" voice-assets.tar.gz f0-assets.tar.gz --clobber

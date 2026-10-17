@@ -714,19 +714,21 @@ cargo test -p voice-lib -p voice-mel -p voice-train
 
 ```
 sources/
-├── pretrained_ljs.pth      139 M   VITS LJSpeech checkpoint gốc
+├── pretrained_ljs.pth      139 M   VITS LJSpeech checkpoint gốc (chỉ để export)
 ├── vits_dec/                56 M   155 tensor .npy + config + ground truth
 ├── features/                        HuBERT features đã xuất (audio đích) — §13.6.1
 ├── vits/                            mã nguồn VITS gốc (tham chiếu)
 ├── Applio/                    54 M   mã nguồn RVC (tham chiếu)
 ├── burn/                            mã nguồn Burn 0.22 (tra LoRA/freeze)
 ├── onnx_hubert_new/          360 M   ContentVec ONNX
-├── rmvpe.onnx                345 M   RMVPE ONNX
-├── vocoder/                   97 M   🗑️ SpeechT5 HiFi-GAN — đường cũ đã bỏ, data còn trên đĩa
+├── rmvpe.onnx                345 M   RMVPE ONNX (cho voice-f0)
 ├── 422-122949-0031.wav       428 K   wav test chính (float32, 16 kHz)
-├── ref_mel.npy / ref_audio.npy      ground truth SpeechT5
+├── ref_mel.npy                       ground truth SpeechT5
 └── Applio/logs/reference/    ground truth RVC (contentvec/feats.npy, pitch_*.npy)
 ```
+
+Các file model > 100 MB (`pretrained_ljs.pth`, `onnx_hubert_new/`, `rmvpe.onnx`)
+**pull từ ngoài** theo `scripts/asset_checksums.txt` — xem §16.2.
 
 Ground truth cho `dec`:
 
@@ -2063,34 +2065,41 @@ Repo: `https://github.com/hungpham10/voice-rs` (public, MIT).
 - `samples/422-122949-0031.wav` (428 KB, LibriSpeech `test-clean`, CC BY 4.0)
   commit được vì nhỏ — kèm attribution ở `README.md`.
 
-### 16.2 Asset nặng — Release `assets-v1` (bundle đóng gói tự động)
+### 16.2 Model nguồn — nơi pull (ngoài git)
 
-Trọng số gốc > 100 MB đến từ ngoài git:
+Model > 100 MB **không đẩy lên GitHub**. `scripts/asset_checksums.txt` là bảng nguồn
+pull duy nhất (kèm sha256 + size để verify):
 
-| File gốc | Nguồn |
-|---|---|
-| `pretrained_ljs.pth` (139 MB) | Google Drive dự án VITS gốc (`sources/vits/README.md:11`, folder `1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2`) |
-| `model.onnx` (360 MB) | ContentVec-768 `HubertModelWithFinalProj` — HF (`lengyue233/content-vec-best` / `TigreGotico/voiceclonnx-rvc`) |
+| File | Nguồn pull | Verify |
+|---|---|---|
+| `model.onnx` (360 MB) | HF **của mình**: `hung0913208/voice-rs-assets` | sha256 `b7759e5a…` — bản ContentVec đã đo `3e-4` |
+| `rmvpe.onnx` (345 MB) | HF `TigreGotico/voiceclonnx-rvc` | sha256 `5370e71a…` khớp nguyên tử |
+| `pretrained_ljs.pth` (139 MB) | Google Drive **file id trực tiếp** `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `dec` |
 
-Thay vì bắt Colab tự kéo Drive + HF rồi export, repo **đóng gói sẵn** thành một
-bundle duy nhất và publish lên Release:
+> ⚠️ **Bản ContentVec trên `TigreGotico` KHÁC byte** với bản đã verify của mình
+> (377,755,911 vs 377,670,331 B) nên **không** dùng làm canonical. Vì vậy model được
+> upload lên HF riêng.
+
+Từ 3 file trên, workflow đóng gói **2 bundle chỉ-model** rồi publish lên Release:
 
 ```
-voice-assets.tar.gz
-├── sources/onnx_hubert_new/model.onnx     # ContentVec
-├── sources/vits_dec/                      # dec ĐÃ export (+ ref_*.npz để verify)
-├── sources/features/422-122949-0031.npy   # features của wav mẫu
-└── samples/422-122949-0031.wav
+voice-assets.tar.gz      # ContentVec + VITS dec (đã export) + SHA256SUMS
+├── sources/onnx_hubert_new/model.onnx
+└── sources/vits_dec/    # dec/*.npy + config.json + ref_*.npz (verify_dec)
+
+f0-assets.tar.gz         # RMVPE (cho voice-f0) + SHA256SUMS
+└── sources/rmvpe.onnx
 ```
 
-→ Colab chỉ cần tải 1 file, **không cần PyTorch** (export đã làm trong CI).
+→ Colab chỉ tải bundle, **không cần PyTorch** và **không cần dataset** (dữ liệu đích
+người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_assets.sh` tự verify.
 
 ### 16.2.1 GitHub Actions
 
 | Workflow | Kích hoạt | Việc |
 |---|---|---|
 | `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
-| `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo trọng số gốc (Drive + HF) → `export_vits_dec.py` → `embed` sinh features mẫu → đóng gói `voice-assets.tar.gz` → publish Release. |
+| `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` + verify sha256 → `export_vits_dec.py` → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. |
 
 > CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
 > khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.
@@ -2099,7 +2108,8 @@ voice-assets.tar.gz
 
 | Script | Việc |
 |---|---|
-| `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz` từ Release, giải nén vào repo → có `sources/`. |
+| `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
+| `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe.onnx`). |
 | `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — build → (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`). |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`

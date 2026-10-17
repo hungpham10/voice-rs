@@ -47,15 +47,22 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 ./scripts/run_training.sh          # build → validation (verify_dec) → training adapter
 ```
 
-## Asset nặng (không nằm trong git)
+## Model (không nằm trong git)
 
 `sources/` bị `.gitignore`. Cách gọn nhất: `./scripts/fetch_assets.sh` tải bundle
-`voice-assets.tar.gz` từ Release [`assets-v1`](https://github.com/hungpham10/voice-rs/releases/tag/assets-v1)
-(ContentVec ONNX + `vits_dec` đã export + features mẫu), **không cần PyTorch**.
+**chỉ-model** từ Release [`assets-v1`](https://github.com/hungpham10/voice-rs/releases/tag/assets-v1):
 
-Bundle do workflow `.github/workflows/release-assets.yml` tạo: kéo trọng số gốc
-([Google Drive VITS](https://drive.google.com/drive/folders/1ksarh-cJf3F5eKJjLVWY0X1j1qsQqiS2)
-+ ContentVec ONNX từ HuggingFace) rồi đóng gói lại.
+| Bundle | Chứa |
+|---|---|
+| `voice-assets.tar.gz` | ContentVec ONNX + `vits_dec` (VITS generator đã export) |
+| `f0-assets.tar.gz` (`--f0`) | `rmvpe.onnx` (cho `voice-f0`) |
+
+**Không cần PyTorch** trên máy đích (export đã làm trong CI). Bundle kèm `SHA256SUMS`
+để `fetch_assets.sh` tự verify. Dữ liệu đích (dataset) tự tải khi cần.
+
+Nguồn pull gốc cho workflow nằm ở [`scripts/asset_checksums.txt`](scripts/asset_checksums.txt):
+ContentVec từ HF riêng `hung0913208/voice-rs-assets`, RMVPE từ `TigreGotico/voiceclonnx-rvc`,
+checkpoint VITS từ Google Drive — mỗi file kèm sha256 để verify.
 
 Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó gọi 2 script trên.
 
