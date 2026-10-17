@@ -1,0 +1,19 @@
+[package]
+name = "voice-f0"
+version = "2.2.9"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hungpham10/voice-rs"
+
+[dependencies]
+burn = { workspace = true }
+burn-store = { workspace = true }
+thiserror = { workspace = true }
+voice-mel = { path = "../voice-mel" }
+
+[dev-dependencies]
+hound = "3.5"
+npy = "0.4"
+
+[build-dependencies]
+burn-onnx = { workspace = true }

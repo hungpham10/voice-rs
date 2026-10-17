@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/voice-hubert",
+    "crates/voice-mel",
+    "crates/voice-f0", "crates/voice-models",
+    "crates/voice-lib",
+    "crates/voice-train",
+]
+
+[workspace.package]
+version = "2.2.9"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+repository = "https://github.com/hungpham10/voice-rs"
+homepage = "https://github.com/hungpham10/voice-rs"
+authors = [
+    "Hung <hung.nx.pham@icloud.com>",
+]
+
+[workspace.dependencies]
+# Burn framework
+burn = { version = "0.22", features = ["flex", "signal", "std", "autodiff"] }
+burn-store = { version = "0.22" }
+burn-onnx = { version = "0.22" }
+
+
+
+# Audio
+hound = "3.5"
+rosa = "=0.1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+ndarray = "0.16"
+
+# Local crates
+voice-hubert = { path = "crates/voice-hubert" }
+voice-mel = { path = "crates/voice-mel" }
+voice-f0 = { path = "crates/voice-f0" }
+voice-models = { path = "crates/voice-models" }
+voice-lib = { path = "crates/voice-lib" }
+voice-train = { path = "crates/voice-train" }

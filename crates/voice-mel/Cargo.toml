@@ -1,0 +1,18 @@
+[package]
+name = "voice-mel"
+version = "2.2.9"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hungpham10/voice-rs"
+
+[dependencies]
+burn = { workspace = true }
+burn-store = { workspace = true }
+rosa = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
+hound = { workspace = true }

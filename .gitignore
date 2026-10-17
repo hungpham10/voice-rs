@@ -1,0 +1,17 @@
+# Rust build output
+/target
+
+# Heavy model assets + ground truth (regenerate with scripts/ or download
+# from the GitHub Release `assets-v1`). Never commit these.
+/sources
+
+# Codegraph index (local tooling)
+/.codegraph
+
+# Local scratch outputs
+test_output.wav
+colab_out/
+
+# OS / editor junk
+.DS_Store
+*.swp

@@ -1,0 +1,18 @@
+[package]
+name = "voice-hubert"
+version = "2.2.9"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hungpham10/voice-rs"
+
+[dependencies]
+burn = { workspace = true }
+burn-store = { workspace = true }
+hound = { workspace = true }
+rand = "0.10.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+burn-onnx = { workspace = true }

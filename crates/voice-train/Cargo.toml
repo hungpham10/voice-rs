@@ -1,0 +1,18 @@
+[package]
+name = "voice-train"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# Training + validation only. Kept out of `voice-lib` (which is for external
+# inference consumers) so the shared library never grows a training dependency.
+[dependencies]
+burn = { workspace = true }
+voice-lib = { workspace = true }
+voice-mel = { workspace = true }
+voice-models = { workspace = true }
+hound = { workspace = true }
