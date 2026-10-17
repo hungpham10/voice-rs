@@ -7876,7 +7876,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voice-f0"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "burn",
  "burn-onnx",
@@ -7889,7 +7889,7 @@ dependencies = [
 
 [[package]]
 name = "voice-hubert"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "burn",
  "burn-onnx",
@@ -7904,14 +7904,14 @@ dependencies = [
 
 [[package]]
 name = "voice-lib"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "burn",
 ]
 
 [[package]]
 name = "voice-mel"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "approx",
  "burn",
@@ -7925,7 +7925,7 @@ dependencies = [
 
 [[package]]
 name = "voice-models"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "burn",
  "serde_json",
@@ -7934,7 +7934,7 @@ dependencies = [
 
 [[package]]
 name = "voice-train"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "burn",
  "clap",

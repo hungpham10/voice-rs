@@ -34,7 +34,7 @@ GitHub Release  assets-v1            ──►  voice-assets.tar.gz
    • sources/contentvec/contentvec_768l12.onnx
    • sources/vits_ljs_dec/            (155 .npy + config + ref_*.npz)
 
-GitHub Release  v2.2.10  (cargo-dist)  ──►  voice-{hubert,train,models}-....tar.xz
+GitHub Release  v2.2.11  (cargo-dist)  ──►  voice-{hubert,train,models}-....tar.xz
    • embed  ·  voice-train  ·  verify_dec   (Linux x86_64)
 
 repo  samples/422-122949-0031.wav     ←   wav mẫu (nằm trong git)
@@ -79,7 +79,7 @@ cd voice-rs
 # —— hoặc làm từng bước ——
 # ./scripts/fetch_assets.sh                 # model, verify SHA256SUMS (tag assets-v1)
 # ./scripts/fetch_assets.sh --f0            # thêm rmvpe_f0.onnx nếu cần voice-f0
-# ./scripts/fetch_bin.sh                    # binary Linux x86_64 → ./bin/ (tag v2.2.10)
+# ./scripts/fetch_bin.sh                    # binary Linux x86_64 → ./bin/ (tag v2.2.11)
 
 # 2) validation + training
 SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh
