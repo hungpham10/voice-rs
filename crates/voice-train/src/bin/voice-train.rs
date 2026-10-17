@@ -1,0 +1,282 @@
+//! CLI hợp nhất cho đường huấn luyện VC 1→1 (§13.6.4a).
+//!
+//! ```text
+//! voice-train train bridge --train-manifest ... --val-manifest ... [--device cpu]
+//! voice-train eval         --val-manifest ... --adapter ... [--gate gate.toml]
+//! ```
+//!
+//! `eval` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use voice_lib::vc::Adapter;
+use voice_mel::MelConfig;
+use voice_models::dec::Generator;
+use voice_train::dataset::Dataset;
+use voice_train::train::BridgeConfig;
+use voice_train::{device, eval, manifest, mel, train};
+
+#[derive(Parser)]
+#[command(name = "voice-train", version, about = "Huấn luyện + đánh giá adapter VC 1→1")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Huấn luyện
+    Train {
+        #[command(subcommand)]
+        what: TrainCmd,
+    },
+    /// Đánh giá + cổng PASS/FAIL (mã thoát 1 khi FAIL)
+    Eval(EvalArgs),
+}
+
+#[derive(Subcommand)]
+enum TrainCmd {
+    /// Luồng 1 — cầu nối nội dung nhiều giọng (chỉ `Adapter` học, `dec` đóng băng)
+    Bridge(BridgeArgs),
+}
+
+#[derive(Parser)]
+struct BridgeArgs {
+    /// Manifest các câu train (CSV hợp đồng).
+    #[arg(long)]
+    train_manifest: PathBuf,
+    /// Manifest các câu val.
+    #[arg(long)]
+    val_manifest: PathBuf,
+    #[arg(long, default_value = "sources/vits_ljs_dec")]
+    dec_dir: PathBuf,
+    #[arg(long, default_value = "sources/features/bridge")]
+    out_dir: PathBuf,
+    /// Số frame latent mỗi mẫu (tự co theo câu ngắn nhất).
+    #[arg(long, default_value_t = 86)]
+    seg: usize,
+    /// Số câu mỗi bước.
+    #[arg(long, default_value_t = 8)]
+    batch: usize,
+    #[arg(long, default_value_t = 500)]
+    steps: usize,
+    #[arg(long, default_value_t = 1e-3)]
+    lr: f64,
+    /// Cứ bao nhiêu bước đo val một lần.
+    #[arg(long, default_value_t = 50)]
+    val_every: usize,
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+    /// `cpu` | `cuda` | `metal` (mặc định cpu).
+    #[arg(long, default_value = "cpu")]
+    device: String,
+}
+
+#[derive(Parser)]
+struct EvalArgs {
+    /// Manifest các câu val.
+    #[arg(long)]
+    val_manifest: PathBuf,
+    /// Adapter đã huấn luyện (`.bpk`).
+    #[arg(long)]
+    adapter: PathBuf,
+    #[arg(long, default_value = "sources/vits_ljs_dec")]
+    dec_dir: PathBuf,
+    #[arg(long, default_value = "cpu")]
+    device: String,
+    /// File ngưỡng `key = value` (mặc định: ngưỡng trong code).
+    #[arg(long)]
+    gate: Option<PathBuf>,
+    /// Ghi báo cáo từng câu ra CSV.
+    #[arg(long)]
+    out_report: Option<PathBuf>,
+    /// Ghi audio sinh cho từng câu vào thư mục này.
+    #[arg(long)]
+    out_audio_dir: Option<PathBuf>,
+    #[arg(long)]
+    max_mel_l1: Option<f64>,
+    #[arg(long)]
+    max_speaker_gap: Option<f64>,
+    #[arg(long)]
+    min_rms: Option<f64>,
+    #[arg(long)]
+    max_rms: Option<f64>,
+    #[arg(long)]
+    max_drift: Option<f64>,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let result = match cli.cmd {
+        Cmd::Train { what } => match what {
+            TrainCmd::Bridge(a) => run_bridge(a),
+        },
+        Cmd::Eval(a) => run_eval(a),
+    };
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let device = device::select(&a.device)?;
+
+    let train_entries = manifest::read(&a.train_manifest)?;
+    let val_entries = manifest::read(&a.val_manifest)?;
+    if train_entries.is_empty() {
+        return Err(format!("{} rỗng", a.train_manifest.display()).into());
+    }
+    if val_entries.is_empty() {
+        return Err(format!("{} rỗng", a.val_manifest.display()).into());
+    }
+
+    println!("== nạp dataset ==");
+    let train_ds = Dataset::load(&train_entries)?;
+    let val_ds = Dataset::load(&val_entries)?;
+
+    let cfg = BridgeConfig {
+        dec_dir: a.dec_dir,
+        out_dir: a.out_dir,
+        seg: a.seg,
+        batch: a.batch,
+        steps: a.steps,
+        lr: a.lr,
+        val_every: a.val_every,
+        seed: a.seed,
+    };
+    println!("== train bridge (device {}) ==", a.device);
+    let s = train::train_bridge(&train_ds, &val_ds, &cfg, &device)?;
+
+    let ratio = s.first / s.last;
+    println!(
+        "\ntrain mel-L1: {:.5} → {:.5} (giảm {:.2}×)",
+        s.first, s.last, ratio
+    );
+    println!("val mel-L1 tốt nhất: {:.5}", s.best_val);
+    println!("adapter cuối: {}", s.adapter_path.display());
+    println!("adapter tốt nhất: {}", s.best_path.display());
+    if !(ratio.is_finite() && ratio > 1.0) {
+        eprintln!("⚠️  loss KHÔNG giảm — kiểm dữ liệu/lr (chưa tính là FAIL, chạy `eval`)");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let device = device::select(&a.device)?;
+
+    let entries = manifest::read(&a.val_manifest)?;
+    let ds = Dataset::load(&entries)?;
+    let adapter = Adapter::load(&a.adapter, &device)?;
+    let gen = Generator::load(&a.dec_dir, &device)?;
+    let mel_cfg = MelConfig::ljs();
+    let basis = mel::mel_basis(&mel_cfg, &device);
+
+    // Đo drift: hai lượt độc lập phải cho cùng mel-L1 (tất định).
+    let r1 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device)?;
+    let r2 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device)?;
+    let drift = (r1.mean_mel_l1 - r2.mean_mel_l1).abs();
+    let report = eval::report_from(r1.per_utt.clone(), drift);
+
+    // Ngưỡng: mặc định → file gate → override CLI.
+    let mut gate = match &a.gate {
+        Some(p) => eval::Gate::from_file(p)?,
+        None => eval::Gate::default(),
+    };
+    if let Some(v) = a.max_mel_l1 {
+        gate.max_mel_l1 = v;
+    }
+    if let Some(v) = a.max_speaker_gap {
+        gate.max_speaker_gap = v;
+    }
+    if let Some(v) = a.min_rms {
+        gate.min_rms = v;
+    }
+    if let Some(v) = a.max_rms {
+        gate.max_rms = v;
+    }
+    if let Some(v) = a.max_drift {
+        gate.max_drift = v;
+    }
+
+    print_report(&report);
+
+    // Tuỳ chọn: báo cáo CSV.
+    if let Some(path) = &a.out_report {
+        let mut s = String::from("utt_id,speaker_id,mel_l1,rms,samples,finite\n");
+        for m in &report.per_utt {
+            s.push_str(&format!(
+                "{},{},{:.6},{:.6},{},{}\n",
+                m.utt_id, m.speaker_id, m.mel_l1, m.rms, m.samples, m.finite
+            ));
+        }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(path, s)?;
+        println!("đã ghi báo cáo: {}", path.display());
+    }
+
+    // Tuỳ chọn: ghi audio sinh (nghe thử).
+    if let Some(dir) = &a.out_audio_dir {
+        std::fs::create_dir_all(dir)?;
+        for (u, utt) in ds.utts.iter().enumerate() {
+            let t_out = ds.latent_len(u).max(1);
+            let t_h = Dataset::hubert_frames_for(t_out).min(utt.t_h).max(1);
+            let host = ds.full_feats_channel_major(u, t_out);
+            let c = utt.c;
+            let feats =
+                burn::tensor::Tensor::<3>::from_data(
+                    burn::tensor::TensorData::new(host, [1, c, t_h]),
+                    &device,
+                );
+            let z = adapter.forward_to(feats, t_out);
+            let wav = gen
+                .forward(z)
+                .reshape([1, t_out * voice_train::dataset::SAMPLES_PER_FRAME])
+                .into_data()
+                .as_slice::<f32>()?
+                .to_vec();
+            let path = dir.join(format!("{}.wav", utt.utt_id));
+            voice_train::data::write_wav_mono(&path, &wav, 22050)?;
+        }
+        println!("đã ghi audio vào {}", dir.display());
+    }
+
+    let (pass, fails) = gate.check(&report);
+    println!();
+    if pass {
+        println!("✅ PASS — đạt cổng chất lượng");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!("❌ FAIL — vi phạm cổng:");
+        for f in &fails {
+            println!("   • {f}");
+        }
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn print_report(r: &eval::EvalReport) {
+    println!("\n== eval ==");
+    println!("câu: {} · giọng: {}", r.per_utt.len(), r.per_speaker.len());
+    println!("mel-L1 trung bình  : {:.5}", r.mean_mel_l1);
+    println!("speaker_gap        : {:.4}", r.speaker_gap);
+    println!("rms [min, max]     : [{:.3e}, {:.3e}]", r.min_rms, r.max_rms);
+    println!("drift              : {:.3e}", r.drift);
+    println!("speaker-similarity : N/A (cần ContentVec so sánh — Luồng 2)");
+    if !r.all_finite {
+        println!("⚠️  có mẫu audio không hữu hạn");
+    }
+    println!("\nmel-L1 theo giọng:");
+    for (spk, s) in &r.per_speaker {
+        println!("  {spk:>12}  {:>3} câu  {:.5}", s.count, s.mean_mel_l1);
+    }
+}

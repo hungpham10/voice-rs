@@ -86,6 +86,14 @@ impl Adapter {
             .save(path)
             .map_err(|e| e.to_string())
     }
+
+    /// Nạp trọng số adapter đã lưu bằng [`Adapter::save`] (cùng định dạng
+    /// burnpack). `device` quyết định nơi dựng tensor.
+    pub fn load(path: &std::path::Path, device: &Device) -> Result<Self, String> {
+        Self::new(device)
+            .try_load_file(path)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -139,5 +147,31 @@ mod tests {
         let z = a.forward_to(feats, 589);
         assert_eq!(z.dims(), [1, OUT_DIM, 589]);
         assert!(z.into_data().as_slice::<f32>().unwrap().iter().all(|v| v.is_finite()));
+    }
+
+    /// `save` → `load` phải cho ra adapter y hệt (hợp đồng checkpoint §13.6.4f).
+    #[test]
+    fn save_and_load_round_trip() {
+        let device = device();
+        let a = Adapter::new(&device);
+        let path = std::env::temp_dir().join("voice_rs_adapter_roundtrip.bpk");
+        a.save(&path).unwrap();
+        let b = Adapter::load(&path, &device).unwrap();
+
+        let feats = ramp(IN_DIM, 5);
+        let za: Vec<f32> = a
+            .forward_to(feats.clone(), 7)
+            .into_data()
+            .as_slice::<f32>()
+            .unwrap()
+            .to_vec();
+        let zb: Vec<f32> = b
+            .forward_to(feats, 7)
+            .into_data()
+            .as_slice::<f32>()
+            .unwrap()
+            .to_vec();
+        assert_eq!(za, zb);
+        let _ = std::fs::remove_file(&path);
     }
 }
