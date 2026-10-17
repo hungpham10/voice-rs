@@ -1,7 +1,7 @@
 //! Verify generator VITS (`dec`) viết tay bằng Burn với PyTorch.
 //!
-//! Đối chiếu `sources/vits_ljs_dec/ref_audio.npz` (sinh bởi
-//! `scripts/export_vits_dec.py`) trên 7 giá trị `T`:
+//! Đối chiếu `sources/vits_ljs_dec/ref_audio.npz` (ground truth đã đóng băng,
+//! phát trong release bundle / HF) trên 7 giá trị `T`:
 //!   - biên dưới : T = 1, 2      → bắt lỗi ở kích thước tối thiểu
 //!   - lẻ        : T = 37, 137   → lỗi off-by-one của ConvTranspose chỉ lộ ở đây
 //!   - tròn      : T = 10, 100, 250
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_npz = dir.join("ref_audio.npz");
     let input_npz = dir.join("ref_input.npz");
     if !audio_npz.exists() {
-        return Err(format!("{audio_npz:?} chưa có — chạy scripts/export_vits_dec.py").into());
+        return Err(format!("{audio_npz:?} chưa có — chạy ./scripts/fetch_assets.sh").into());
     }
 
     let device = Device::default();

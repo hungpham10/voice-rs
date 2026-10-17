@@ -1,6 +1,6 @@
 //! Verify `MelConfig::speecht5()` against the HF ground truth in
-//! `sources/ref_mel.npy` (produced by `scripts/ref_mel.py`, itself checked
-//! against `transformers.SpeechT5FeatureExtractor._extract_mel_features`).
+//! `sources/ref_mel.npy` (ground truth log-mel đã đóng băng, sinh một lần từ
+//! `transformers.SpeechT5FeatureExtractor._extract_mel_features`).
 //!
 //! Run:  cargo run --release -p voice-mel --example verify_speecht5
 

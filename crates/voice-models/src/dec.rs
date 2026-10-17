@@ -18,8 +18,8 @@
 //! thêm giá trị gì, nhưng lại kéo theo `OUT_DIR`, `.bpk` và phụ thuộc
 //! `burn-onnx`. Tự viết ~250 dòng thì sửa kiến trúc chỉ cần sửa Rust.
 //!
-//! Trọng số nạp từ `.npy` do `scripts/export_vits_dec.py` sinh ra
-//! (weight-norm đã được gộp sẵn ở Python).
+//! Trọng số nạp từ `.npy` đã export MỘT LẦN từ checkpoint VITS (đóng băng trên
+//! HF, phát trong release bundle — weight-norm đã gộp sẵn lúc export).
 
 use std::path::{Path, PathBuf};
 

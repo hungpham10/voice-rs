@@ -1,10 +1,11 @@
 name: release-assets
 
-# Kéo MODEL nguồn (ngoài git) theo `scripts/asset_checksums.txt`, verify sha256,
-# export trọng số `dec` từ `pretrained_ljs.pth`, rồi đóng gói 2 bundle CHỈ-MODEL
-# và publish lên GitHub Release. Colab tải bundle bằng `scripts/fetch_assets.sh`.
+# Kéo MODEL nguồn (ngoài git) theo `scripts/asset_checksums.txt` từ HuggingFace,
+# verify sha256, rồi đóng gói 2 bundle CHỈ-MODEL và publish lên GitHub Release.
+# Colab tải bundle bằng `scripts/fetch_assets.sh`.
 #
-# Không đụng tới dữ liệu/ground truth — người dùng tự tải dataset khi cần.
+# HOÀN TOÀN RUST: không Python, không torch, không export — trọng số `vits_ljs_dec/*.npy`
+# đã được export MỘT LẦN rồi đóng băng trên HF.
 #
 # Chạy tay: Actions → release-assets → Run workflow.
 on:
@@ -23,27 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Kéo model nguồn + verify sha256
+      - name: Kéo model nguồn từ HuggingFace + verify sha256
         run: |
           set -euo pipefail
-          pip install --quiet gdown
           grep -vE '^[[:space:]]*(#|$)' scripts/asset_checksums.txt | \
           while read -r sha size dest url; do
             echo "→ $dest ($size bytes)"
             mkdir -p "sources/$(dirname "$dest")"
-            if [[ "$url" == *drive.google.com* ]]; then
-              gdown "$url" -O "sources/$dest"
-            else
-              curl -L --fail --retry 3 -o "sources/$dest" "$url"
-            fi
+            curl -L --fail --retry 3 -o "sources/$dest" "$url"
             echo "$sha  sources/$dest" | sha256sum -c -
           done
-
-      - name: Export trọng số dec (torch CPU)
-        run: |
-          set -euo pipefail
-          pip install --quiet numpy torch --index-url https://download.pytorch.org/whl/cpu
-          python scripts/export_vits_dec.py --hps scripts/ljs_base.json
 
       - name: Đóng gói bundle (chỉ model) + SHA256SUMS
         run: |
@@ -56,7 +46,7 @@ jobs:
             tar -czf "$out" -C "$stage" sources SHA256SUMS
             ls -lh "$out"
           }
-          # main: ContentVec + VITS dec (đã export + ground truth ref_*.npz để verify)
+          # main: ContentVec + VITS dec (trọng số + config + ground truth ref_*.npz)
           make_bundle voice-assets.tar.gz .pkg-main sources/contentvec sources/vits_ljs_dec
           # f0: RMVPE
           make_bundle f0-assets.tar.gz .pkg-f0 sources/rmvpe_f0.onnx

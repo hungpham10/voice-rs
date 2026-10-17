@@ -8,7 +8,7 @@
 //! `sources/vits_ljs_dec/` + wav + features:
 //!
 //! ```bash
-//! python3 scripts/export_vits_dec.py
+//! ./scripts/fetch_assets.sh          # nạp vits_ljs_dec + contentvec từ HF
 //! cargo run --release -p voice-hubert --example embed -- sources/422-122949-0031.wav sources/features/422-122949-0031.npy
 //! cargo run --release -p voice-train  --example train_adapter
 //! ```
@@ -39,7 +39,7 @@ const STEPS: usize = 300;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dec_dir = PathBuf::from(DEC_DIR);
     if !dec_dir.join("config.json").exists() {
-        return Err(format!("{DEC_DIR}/ chưa có — chạy scripts/export_vits_dec.py").into());
+        return Err(format!("{DEC_DIR}/ chưa có — chạy ./scripts/fetch_assets.sh").into());
     }
     if !PathBuf::from(FEATS).exists() {
         return Err(format!("{FEATS} chưa có — chạy `embed <wav> <out.npy>` trước").into());

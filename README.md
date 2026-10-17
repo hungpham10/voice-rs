@@ -4,8 +4,9 @@ Hệ **voice conversion 1→1** (một giọng nguồn → một giọng đích)
 [Burn](https://github.com/tracel-ai/burn)**, chạy suy luận **CPU-first**, kèm phụ đề
 (closed caption) neo theo mốc thời gian của video nguồn.
 
-> Inference hoàn toàn bằng Rust. Python/PyTorch chỉ dùng **offline** để export trọng
-> số và tạo ground truth — không nằm trong runtime.
+> Inference hoàn toàn bằng Rust. Trọng số và ground truth đã được export **một lần**
+> rồi đóng băng trên HuggingFace — repo **không có Python trong pipeline/runtime**
+> (chỉ còn 1 công cụ dev `scripts/screen_onnx.py`, chạy tay khi nạp ONNX mới).
 
 Tài liệu kiến trúc đầy đủ (nguồn sự thật duy nhất): **[`docs/architecture.md`](docs/architecture.md)**.
 
@@ -33,7 +34,7 @@ crates/
 docs/architecture.md   nguồn sự thật
 notebooks/colab_train.ipynb   huấn luyện adapter trên Colab (CPU)
 samples/               audio test nhỏ, commit được
-scripts/               export trọng số / ground truth (Python, offline)
+scripts/               nạp model từ HF + chạy huấn luyện (Rust/shell; còn `screen_onnx.py` là công cụ dev)
 ```
 
 ## Chạy nhanh (local)
@@ -61,9 +62,10 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 để `fetch_assets.sh` tự verify. Dữ liệu đích (dataset) tự tải khi cần.
 
 Nguồn pull gốc cho workflow nằm ở [`scripts/asset_checksums.txt`](scripts/asset_checksums.txt):
-tất cả model (ContentVec ONNX, `rmvpe_f0.onnx`, `pretrained_ljs.pth`) nằm trên HF của mình —
+tất cả model (ContentVec ONNX, `rmvpe_f0.onnx`, `vits_ljs_dec/`) nằm trên HF của mình —
 [`hung0913208/voice-rs-assets`](https://huggingface.co/hung0913208/voice-rs-assets) — mỗi file
-kèm sha256 để verify.
+kèm sha256 để verify. Không còn `pretrained_ljs.pth` (`dec` đã export sẵn) nên **không cần
+Python/PyTorch** ở bất kỳ bước nào.
 
 Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó gọi 2 script trên.
 

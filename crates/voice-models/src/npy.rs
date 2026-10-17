@@ -1,7 +1,8 @@
 //! Đọc file `.npy` (float32, ≤2 chiều) — dùng để nạp trọng số VITS.
 //!
-//! `scripts/export_vits_dec.py` ghi mỗi tensor ra một file `.npy` với đường
-//! dẫn phẳng (`ups.0.weight.npy`), nên ở đây chỉ cần bóc header rồi đọc thẳng
+//! Trọng số `dec` được export MỘT LẦN từ checkpoint VITS (đóng băng trên HF,
+//! phát trong release bundle); mỗi tensor nằm ở một file `.npy` với đường dẫn
+//! phẳng (`ups.0.weight.npy`), nên ở đây chỉ cần bóc header rồi đọc thẳng
 //! `f32` little-endian.
 
 use std::fs;

@@ -33,7 +33,7 @@ const T: usize = 10;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(DIR);
     if !dir.join("ref_input.npz").exists() {
-        return Err(format!("{DIR}/ref_input.npz chưa có — chạy scripts/export_vits_dec.py").into());
+        return Err(format!("{DIR}/ref_input.npz chưa có — chạy ./scripts/fetch_assets.sh").into());
     }
 
     // ⚠️ `Device::default()` KHÔNG bật autodiff. Thiếu `.autodiff()` thì `backward()`

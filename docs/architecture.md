@@ -2,9 +2,9 @@
 
 Ghi chú kỹ thuật cho voice conversion viết bằng Rust + Burn.
 
-**Runtime 100% Rust.** Python/PyTorch chỉ là công cụ offline để xuất trọng số và
-dựng ground truth — giống `protoc` sinh code từ `.proto`. Binary cuối cùng không
-cần Python.
+**Runtime 100% Rust.** Trọng số và ground truth đã được export **một lần** rồi đóng
+băng trên HuggingFace; repo **không có Python trong pipeline** (còn `scripts/screen_onnx.py`
+là công cụ dev, chạy tay khi nạp một ONNX mới). Binary cuối cùng không cần Python.
 
 > **Chỗ chưa chốt** được đánh dấu 🔶. Đó là những câu hỏi cần đo, không phải
 > những chỗ còn suy nghĩ. Mọi thứ khác trong tài liệu này đã kiểm bằng số hoặc
@@ -682,17 +682,16 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 | ~~`voice-index`~~ | 🗑️ **đã xoá** — FAISS/RVC, không dùng |
 
 ```bash
-# ===== VITS: xuất trọng số (1 lần) rồi verify =====
-python3 scripts/export_vits_dec.py
+# ===== VITS: nạp trọng số (đã đóng băng trên HF) rồi verify =====
+./scripts/fetch_assets.sh                                # contentvec + vits_ljs_dec từ HF
 cargo run --release -p voice-models --example verify_dec     # forward vs PyTorch
 cargo run --release -p voice-models --example verify_backward # GĐ2: gradient
 cargo run --release -p voice-models --example verify_lora     # GĐ3: BLOCKED, xem §13.8.2
 
-# Kiểm tra sàng lọc trước khi làm bất cứ thứ gì
+# Kiểm tra sàng lọc trước khi làm bất cứ thứ gì (công cụ dev, chỉ khi nạp ONNX mới)
 python3 scripts/screen_onnx.py <model.onnx>
 
-# Anchor đo lường mel (đối chiếu SpeechT5FeatureExtractor — không còn runtime)
-python3 scripts/ref_mel.py
+# Anchor đo lường mel (ref_mel.npy là ground truth đã đóng băng, không còn runtime)
 cargo run --release -p voice-mel --example verify_speecht5
 
 # Các tầng đã xong
@@ -714,7 +713,7 @@ cargo test -p voice-lib -p voice-mel -p voice-train
 
 ```
 sources/
-├── pretrained_ljs.pth      139 M   VITS LJSpeech checkpoint gốc (chỉ để export)
+├── pretrained_ljs.pth      139 M   VITS LJSpeech checkpoint gốc (lưu trữ local; KHÔNG còn trong pipeline — dec đã export sẵn)
 ├── vits_ljs_dec/            56 M   155 tensor .npy + config + ground truth
 ├── features/                        HuBERT features đã xuất (audio đích) — §13.6.1
 ├── vits/                            mã nguồn VITS gốc (tham chiếu)
@@ -727,7 +726,7 @@ sources/
 └── Applio/logs/reference/    ground truth RVC (contentvec/feats.npy, pitch_*.npy)
 ```
 
-Các file model > 100 MB (`pretrained_ljs.pth`, `contentvec/`, `rmvpe_f0.onnx`)
+Các file model (`contentvec/`, `rmvpe_f0.onnx`, `vits_ljs_dec/`)
 **pull từ ngoài** theo `scripts/asset_checksums.txt` — xem §16.2.
 
 Ground truth cho `dec`:
@@ -790,10 +789,10 @@ Bản khác export chưa chắc đã sạch op — vẫn phải chạy `screen_o
 
 | Script | Vai trò |
 |---|---|
-| `scripts/screen_onnx.py` | sàng lọc ONNX trước khi import (§7) |
-| `scripts/export_vits_dec.py` | gộp weight-norm, xuất 155 tensor `.npy` + ground truth cho 7 giá trị `T` |
-| `scripts/ref_mel.py` | sinh ground-truth log-mel SpeechT5 (không cần `transformers`) — **anchor đo lường** |
-| `scripts/check_ref_mel.py` | đối chiếu `ref_mel.py` với `transformers` thật |
+| `scripts/screen_onnx.py` | sàng lọc ONNX trước khi import (§7) — **công cụ dev**, chỉ chạy tay khi nạp một ONNX mới |
+| ~~`scripts/export_vits_dec.py`~~ | 🗑️ đã xoá — trọng số `dec` đã export MỘT LẦN rồi đóng băng trên HF (§16.2) |
+| ~~`scripts/ref_mel.py`~~ | 🗑️ đã xoá — `sources/ref_mel.npy` là ground truth đã đóng băng |
+| ~~`scripts/check_ref_mel.py`~~ | 🗑️ đã xoá — chỉ dùng để kiểm chứng `ref_mel.py` một lần |
 | ~~`scripts/export_vocoder.py`~~ | 🗑️ đã xoá — chỉ phục vụ vocoder SpeechT5 đã bỏ (§6.1) |
 
 ---
@@ -2074,13 +2073,17 @@ pull duy nhất (kèm sha256 + size để verify):
 |---|---|---|
 | `contentvec/contentvec_768l12.onnx` (360 MB) | HF **của mình**: `hung0913208/voice-rs-assets` | sha256 `b7759e5a…` — ContentVec-768 (HuBERT fb) đã đo `3e-4` |
 | `rmvpe_f0.onnx` (345 MB) | HF **của mình** (`voice-rs-assets`) — gốc từ `TigreGotico/voiceclonnx-rvc/rmvpe.onnx` | sha256 `5370e71a…` khớp nguyên tử |
-| `pretrained_ljs.pth` (139 MB) | HF **của mình** (`voice-rs-assets`) — gốc từ Drive file id `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `vits_ljs_dec` |
+| `vits_ljs_dec/` (~56 MB, 158 file) | HF **của mình** (`voice-rs-assets`) — trọng số `dec` export MỘT LẦN từ `pretrained_ljs.pth` (gốc Drive id `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT`) rồi **đóng băng** + ground truth `ref_*.npz` | sha256 từng file trong `asset_checksums.txt`; Rust nạp thẳng `.npy` |
 
 > ⚠️ **Bản ContentVec trên `TigreGotico` KHÁC byte** với bản đã verify của mình
 > (377,755,911 vs 377,670,331 B) nên **không** dùng làm canonical. Vì vậy model được
 > upload lên HF riêng (đổi tên `model.onnx` → `contentvec_768l12.onnx`).
+>
+> Không còn `pretrained_ljs.pth` trên HF và **không còn Python/torch** ở bất kỳ đâu
+> trong pipeline: `vits_ljs_dec/*.npy` là model `dec` đóng băng. Muốn dec từ checkpoint
+> khác phải viết converter mới (Rust) — xem §12.
 
-Từ 3 file trên, workflow đóng gói **2 bundle chỉ-model** rồi publish lên Release:
+Từ các model trên, workflow đóng gói **2 bundle chỉ-model** rồi publish lên Release:
 
 ```
 voice-assets.tar.gz      # ContentVec + VITS dec (đã export) + SHA256SUMS
@@ -2099,7 +2102,7 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 | Workflow | Kích hoạt | Việc |
 |---|---|---|
 | `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
-| `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` + verify sha256 → `export_vits_dec.py` → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. |
+| `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` (HF) + verify sha256 → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. **Không Python/torch** — trọng số `vits_ljs_dec/*.npy` đã đóng băng trên HF. |
 
 > CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
 > khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.

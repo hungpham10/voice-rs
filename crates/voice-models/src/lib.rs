@@ -5,8 +5,8 @@
 //! burn-onnx. See `docs/architecture.md` §2 for the full spec and the four traps.
 //!
 //! - [`dec`] — `Generator`: latent `z` → waveform, `22.05 kHz`, upsampling ×256.
-//! - [`npy`] — minimal `.npy` reader for the weights written by
-//!   `scripts/export_vits_dec.py`.
+//! - [`npy`] — minimal `.npy` reader for the weights exported once from the
+//!   VITS checkpoint (now frozen on HuggingFace, shipped in the release bundle).
 
 pub mod dec;
 pub mod npy;
