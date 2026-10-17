@@ -25,8 +25,9 @@ fetch_bin() { # <package> <binary-name>
   echo "→ ${bin}  (${asset})"
   curl -L --fail --progress-bar -o "${tmp}" "${url}"
   tar -xJf "${tmp}" -C "${stage}"
-  # Gói cargo-dist đặt binary ở gốc; LICENSE/README đi kèm — chỉ lấy binary.
-  mv "${stage}/${bin}" bin/
+  # cargo-dist bọc mọi thứ trong thư mục <pkg>-<target>/ (binary + LICENSE/README)
+  # → lấy binary từ trong đó.
+  mv "${stage}/${pkg}-${TARGET}/${bin}" bin/
   chmod +x "bin/${bin}"
   rm -rf "${stage}" "${tmp}"
 }
