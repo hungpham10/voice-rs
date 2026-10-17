@@ -24,8 +24,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import prepared_utt, write_raw_manifest  # noqa: E402
 
-# Mirror công khai của VIVOS (AILAB). Có thể override bằng --url.
-VIVOS_URL = "https://huggingface.co/datasets/AILAB-VNUHCM/vivos/resolve/main/vivos.tar.gz"
+# Mirror công khai của VIVOS (AILAB). File LFS nằm trong thư mục `data/` của repo
+# HF. Có thể override bằng --url.
+VIVOS_URL = "https://huggingface.co/datasets/AILAB-VNUHCM/vivos/resolve/main/data/vivos.tar.gz"
 
 
 def _take(rows, limit):
@@ -110,22 +111,40 @@ def _run(tasks, args):
 
 
 def _download_vivos(url: str, dest: Path) -> Path:
+    """Tải + giải nén VIVOS. Tải ra `.part` rồi đổi tên để chạy lại được, có retry."""
+    import time
     import urllib.request
 
     dest.mkdir(parents=True, exist_ok=True)
     tar = dest / "vivos.tar.gz"
     if not tar.exists():
-        print(f"→ tải {url}")
-        urllib.request.urlretrieve(url, tar)
-    print(f"→ giải nén vào {dest}")
-    import shutil
+        part = dest / "vivos.tar.gz.part"
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                print(f"→ tải {url} (lần {attempt}/3)")
+                urllib.request.urlretrieve(url, part)
+                part.rename(tar)
+                break
+            except Exception as e:  # noqa: BLE001 — mạng chập chờn, thử lại
+                last_err = e
+                print(f"  ⚠ lỗi tải: {e}", file=sys.stderr)
+                time.sleep(3 * attempt)
+        else:
+            raise SystemExit(f"✗ không tải được {url}\n  lỗi cuối: {last_err}")
+        print(f"  ⤷ {tar.stat().st_size / 1e6:.0f} MB")
 
+    print(f"→ giải nén vào {dest}")
     with tarfile.open(tar) as t:
-        t.extractall(dest)
-    # thư mục sau giải nén thường là `vivos/`
-    candidates = [p for p in dest.iterdir() if p.is_dir() and (p / "waves").exists()]
-    if candidates:
-        return candidates[0]
+        try:
+            t.extractall(dest, filter="data")  # Python ≥3.12: tránh cảnh báo/không an toàn
+        except TypeError:
+            t.extractall(dest)
+
+    # Thư mục VIVOS sau giải nén thường là `vivos/waves/...`.
+    for base in (dest, *[p for p in dest.iterdir() if p.is_dir()]):
+        if (base / "waves").exists():
+            return base
     return dest
 
 

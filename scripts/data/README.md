@@ -24,8 +24,9 @@ pip install -r scripts/data/requirements.txt
 ## 1) Chuẩn bị một dataset
 
 ```bash
-# VIVOS (16 kHz). Cần dữ liệu đã giải nén, hoặc --download.
+# VIVOS (16 kHz). Cần dữ liệu đã giải nén (--src), hoặc tải sẵn từ mirror HF (--download).
 python scripts/data/prepare.py vivos       --src /path/VIVOS  --out data/vivos
+python scripts/data/prepare.py vivos --download --out data/vivos   # tải data/vivos.tar.gz (~1.5 GB) rồi giải nén
 # Common Voice vi (clips/ + validated.tsv) — mp3 được resample về 16 kHz.
 python scripts/data/prepare.py common-voice --src /path/cv_vi --out data/cv
 # viVoice — thư mục <speaker>/*.wav
