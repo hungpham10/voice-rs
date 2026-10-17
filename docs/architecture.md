@@ -2073,8 +2073,8 @@ pull duy nhất (kèm sha256 + size để verify):
 | File | Nguồn pull | Verify |
 |---|---|---|
 | `contentvec/contentvec_768l12.onnx` (360 MB) | HF **của mình**: `hung0913208/voice-rs-assets` | sha256 `b7759e5a…` — ContentVec-768 (HuBERT fb) đã đo `3e-4` |
-| `rmvpe_f0.onnx` (345 MB) | HF `TigreGotico/voiceclonnx-rvc/rmvpe.onnx` | sha256 `5370e71a…` khớp nguyên tử |
-| `pretrained_ljs.pth` (139 MB) | Google Drive **file id trực tiếp** `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `vits_ljs_dec` |
+| `rmvpe_f0.onnx` (345 MB) | HF **của mình** (`voice-rs-assets`) — gốc từ `TigreGotico/voiceclonnx-rvc/rmvpe.onnx` | sha256 `5370e71a…` khớp nguyên tử |
+| `pretrained_ljs.pth` (139 MB) | HF **của mình** (`voice-rs-assets`) — gốc từ Drive file id `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `vits_ljs_dec` |
 
 > ⚠️ **Bản ContentVec trên `TigreGotico` KHÁC byte** với bản đã verify của mình
 > (377,755,911 vs 377,670,331 B) nên **không** dùng làm canonical. Vì vậy model được

@@ -61,8 +61,9 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 để `fetch_assets.sh` tự verify. Dữ liệu đích (dataset) tự tải khi cần.
 
 Nguồn pull gốc cho workflow nằm ở [`scripts/asset_checksums.txt`](scripts/asset_checksums.txt):
-ContentVec từ HF riêng `hung0913208/voice-rs-assets`, RMVPE từ `TigreGotico/voiceclonnx-rvc`,
-checkpoint VITS từ Google Drive — mỗi file kèm sha256 để verify.
+tất cả model (ContentVec ONNX, `rmvpe_f0.onnx`, `pretrained_ljs.pth`) nằm trên HF của mình —
+[`hung0913208/voice-rs-assets`](https://huggingface.co/hung0913208/voice-rs-assets) — mỗi file
+kèm sha256 để verify.
 
 Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó gọi 2 script trên.
 
