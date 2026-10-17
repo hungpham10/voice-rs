@@ -542,7 +542,7 @@ cửa sổ ±4 quanh argmax, `cents_mapping = 20·arange(360) + 1997.3794`, và
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ xong, 🔶 chờ chốt §13.4 |
 | `voice-models` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
 | `voice-lib` | **Thư viện dùng chung**: `cc` (tách dấu câu, chia frame, `.srt`) + `vc` (`Adapter` Burn P1, nội suy frame rate, resample PCM) | 🟡 logic + `Adapter` xong (**43 unit test**) |
-| `voice-train` | **Huấn luyện + validate**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`, vòng overfit adapter | 🟡 `examples/train_adapter` chạy được, loss giảm — §13.6.2 |
+| `voice-train` | **Huấn luyện + validate**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`, vòng overfit adapter | 🟡 `src/bin/train_adapter` chạy được, loss giảm — §13.6.2 |
 
 `voice-lib` là mục đích cho **bên ngoài** dùng; **training + validate** nằm ở
 `voice-train` — `voice-lib` không được phụ thuộc `sources/` hay build
@@ -1157,7 +1157,7 @@ rất thấp. RVC **không có token "unvoiced" riêng**; unvoiced được xử
 
 | | Cấu trúc | Ưu | Nhược |
 |---|---|---|---|
-| **P1** | `Linear(768→192)[+Emb]` → **bỏ `enc_p`** → `flow` → `dec` | ít tham số, forward rẻ | mất self-attn xử lý phụ thuộc dài |
+| **P1** | `Linear(768→192)[+Emb]` → **bỏ `enc_p`** và **bỏ luôn `flow`** → `dec` | ít tham số, forward rẻ | mất self-attn xử lý phụ thuộc dài |
 | **P2** | `Linear(768→192)[+Emb]` → **giữ `enc_p`**, chỉ thay lớp embedding đầu | tận dụng 6 lớp transformer có sẵn | nhiều tham số hơn |
 | **P3** | Như P1/P2 + thêm `emb_pitch` vào **cả decoder** (đúng kiểu RVC) | giữ cả hai đường pitch | vẫn không có sóng sin tường minh |
 
@@ -1236,13 +1236,15 @@ công suất), sàn `1e-5` rồi `ln`.
 Unit test `burn_mel_matches_rosa` giữ hai đường khớp: max diff `5.3e-3`, mean
 `2.1e-4` trên 87 frame (khác biệt chỉ do sai số `f32` của hai cách STFT).
 
-**Vòng huấn luyện** (`examples/train_adapter.rs`):
+**Vòng huấn luyện** (`src/bin/train_adapter.rs`):
 `feats [1,768,T_h] → Adapter → z [1,192,t_out] → dec (freeze) → wav → log-mel`,
 `loss = L1(mel_gen, mel_target)`, Adam `lr=1e-3`. Wav đích 16 kHz được
 `resample_linear` lên 22.05 kHz **ngoài mạng** rồi cắt còn `t_out·256` mẫu.
 
 **Kết quả (đo thật):** `SEG=86` (1 s) · 40 bước → `mel-L1` `1.847 → 0.830`
-(**giảm 2.22×**, PASS). Biến môi trường `SEG`/`STEPS`/`LR` để smoke nhanh.
+(**giảm 2.22×**, PASS). Biến môi trường `SEG`/`STEPS`/`LR` để smoke nhanh; đường
+dẫn cũng ghi đè được bằng `WAV`/`FEATS`/`DEC_DIR`/`OUT_WAV`/`OUT_ADAPTER`, và
+`SEG` tự kẹp về lượng dữ liệu đang có.
 
 **Hiệu năng:** Flex CPU, `dec` forward+backward ở 589 frame ≈ **33 s/bước**; ở 86
 frame ≈ **4.9 s/bước** (đa luồng, ~312% CPU). Vì thế `SEG` mặc định là cả câu
@@ -1254,6 +1256,104 @@ nhân là **bẫy 5** (§2.3.1): trục weight-norm sai làm `dec` co biên đ�
 sửa, `dec(random N(0,1) z)` cho RMS `2.16e-2` (mức tiếng nói) và loss giảm ngay.
 Đây là loại lỗi **im lặng** mà `verify_dec` một mình không bắt được — phải kiểm
 **tính chất vật lý** của đầu ra (biên độ), không chỉ "khớp PyTorch".
+
+#### 13.6.3 🔶 Hai pha huấn luyện — bridge nội dung dùng chung + timbre riêng
+
+**Vấn đề của P1 hiện tại.** `Adapter` = `Linear(768→192)` gánh **cả** bridge nội
+dung **lẫn** timbre: mỗi giọng đích phải huấn lại **147 648 tham số từ số 0**, và
+không có gì dùng chung giữa các giọng. Thêm giọng thứ hai = làm lại toàn bộ. Với
+1→1 điều này chấp nhận được; khi muốn nhiều giọng thì đắt.
+
+**Ý tưởng: tách phần HỌC thành hai, theo đúng hai thứ khác bản chất.**
+
+| | Pha A — bridge nội dung | Pha B — timbre |
+|---|---|---|
+| Học gì | `Linear(768→192)`: ánh xạ *cách nói* (HuBERT) → latent hợp lệ cho `dec` | module nhỏ biến latent thành *giọng của speaker* |
+| Dùng chung? | **có** — một bridge cho mọi giọng | **không** — mỗi giọng một module |
+| Dữ liệu | nhiều giọng (VIVOS, Common Voice `vi`, …) | 1–5 phút audio **giọng đích** |
+| Tham số | 147 648 | 192 – ~9 200 (xem bảng dưới) |
+| Thêm giọng mới | **không** phải làm gì | chỉ huấn Pha B (hàng chục phút Colab CPU) |
+
+```
+feats [1,768,T] @50 Hz ─┐
+                        ├─► Linear 768→192 ── z0 ──┐   (Pha A — dùng chung, ĐÓNG BĂNG sau pha A)
+timbre (mỗi speaker)  ──┘                          │
+                                                   ▼
+                        timbre module: z = γ⊙z0 + β   (Pha B — học riêng mỗi speaker)
+                                                   │
+                                                   ▼  z [1,192,t_out] @86.13 Hz
+                                     dec (ĐÓNG BĂNG) ──► wav ──► mel-L1 loss
+```
+
+**Bắt buộc: timbre tiêm trên đường adapter, KHÔNG dùng `dec.cond`.**
+VITS làm việc này bằng `dec.cond` (§13.12.1), nhưng `dec` của ta **đã đóng băng** và
+checkpoint LJSpeech **không có** `cond` (`n_speakers = 0`). Thêm `Conv1d` mới nghĩa
+là phải huấn lại `dec` (14.33 M) — phá vỡ điều kiện rẻ nhất của cả hướng này. Vậy
+timbre phải nằm **trong module của ta**, ngay trước khi `dec` nhận `z`.
+
+**Ba lựa chọn module timbre:**
+
+| | Cơ chế | Tham số / giọng | Ghi chú |
+|---|---|---|---|
+| **FiLM** (khuyên dùng) | `z = γ⊙z0 + β`, γ/β suy từ vector timbre | `192×2 = 384` | ★ đủ mạnh, cực nhẹ |
+| bias-add | `z = z0 + b`, `b ∈ R^192` cộng mọi frame | `192` | rẻ nhất; không tương tác theo kênh |
+| LoRA-δ trên Linear | `W = W_chung + U·V`, `r = 8` | `768·8 + 8·192 = 9 216` | tương tác mạnh hơn; chạm vào bridge |
+
+FiLM cho phép **scale** (bóp/nới từng kênh latent) — thứ bias-add không làm được, và
+đúng là cơ chế timbre thường cần (formant / hình dạng quang phổ tổng quát). Đây
+**không phải** `cond` của VITS theo nghĩa "cổng điều khiển ngoài" — nó là module nội
+bộ được huấn, nên **gập được** và không ràng buộc `dec`.
+
+**Học Pha A "quên timbre" — trung hoà theo speaker, không tuyệt đối.**
+Không có "latent ground-truth không timbre" để so. Cách làm thực tế:
+
+1. **batch cân bằng theo speaker** — mỗi batch lấy đều các giọng; gradient về bridge
+   là trung bình → bridge hội tụ về phần *chung*, còn phần riêng dồn về timbre
+   module (chỗ duy nhất còn "nghiêng" được theo giọng);
+2. (tuỳ chọn, làm sau) **regularizer giữ bridge trung tính** — ví dụ ràng buộc đầu
+   ra bridge ít phụ thuộc `speaker_id`.
+
+⚠️ Đừng kỳ vọng bridge "sạch" timbre 100%. Điều cần **đo** là: sau khi đóng băng
+bridge, timbre module có kéo được `z` về đúng giọng không, và bridge còn ổn khi đổi
+speaker không.
+
+**Học Pha B.** Đóng băng bridge (`freeze()`), chỉ `unfreeze()` timbre module. **1–5
+phút** audio giọng đích là đủ (khác hẳn 6.84 s hiện có — xem §13.12.3).
+
+**Dữ liệu.** Pha A cần **nhiều giọng, 16 kHz mono** (đúng định dạng `embed` cần):
+
+| Dataset HF | Giọng | Độ dài | Format | Giấy phép |
+|---|---|---|---|---|
+| `AILAB-VNUHCM/vivos` | 65 | 15 h | **16 kHz mono**, sạch | CC-BY-NC-SA-4.0 |
+| `mozilla-foundation/common_voice_17_0` (`vi`) | nhiều | lớn dần | đọc | **CC0** (dùng thương mại được) |
+| `capleaf/viVoice` | 186 kênh | ~1000 h | 24 kHz → resample 16 k | CC-BY-NC-SA-4.0 |
+
+**Việc code cần làm (khi chốt):**
+
+| Crate | Việc |
+|---|---|
+| `voice-lib/vc` | thêm `Timbre` (FiLM); `Adapter::forward_with_timbre(feats, timbre, t_out)` |
+| `voice-hubert` | `embed` đọc **danh sách** file (batch) thay vì 1 file |
+| `voice-train` | `train_bridge_multi` (batch cân bằng theo speaker) + `train_timbre` (chỉ 1 timbre) |
+| dữ liệu | bước tải + tách VIVOS/CV thành cặp `(wav, feats)` theo speaker |
+
+**Chi phí (Colab CPU).** Pha A nặng hơn P1 (nhiều giọng) nhưng cùng cấu trúc
+`SEG`-chunk: ~vài giờ cho một tập nhỏ (5–8 giọng). Pha B rất nhẹ (chỉ timbre) — hàng
+chục phút.
+
+**Quan hệ với các mục khác:**
+
+- **§13.8.2.5 (LoRA):** Pha B chính là "LoRA trên adapter" nói tới — nhưng FiLM nhẹ
+  hơn LoRA-δ và không phải gập vào `dec`; hướng viết `ConvLora` (§13.8.2.5A)
+  **không cần** cho luồng này.
+- **§13.11:** không dùng `dec.cond`, cũng không đụng LoRA `dec` — timbre sống trong
+  đường adapter.
+- **§13.12:** 1→1 vẫn giữ; Pha A + B chỉ là cách *tổ chức việc huấn* để nhiều giọng
+  dùng chung bridge, mỗi giọng một timbre nhỏ.
+
+⚠️ **Trạng thái 🔶:** đây là **thiết kế đã bàn, chưa code.** Thứ tự đề xuất: (1) Pha
+B trên bridge P1 hiện có (chứng minh timbre học được); (2) tách Pha A khi có nhiều
+giọng.
 
 ### 13.7 192-D đó là hidden, không phải `z`
 
@@ -1668,6 +1768,11 @@ Không phải vì B dễ hơn nhiều, mà vì **A trả tiền bằng thứ ta 
 LoRA là **công cụ huấn**. Với bài toán 1→1 thì cả hai đều **chưa cần**: màu âm nằm
 trong trọng số adapter là đủ. Xem §13.12.
 
+> **Bổ sung — §13.6.3:** cách tách timbre ở đó (FiLM trên đường adapter) làm việc
+> **chỉ trong đường adapter của ta**, **không** cần `cond`/LoRA trên `dec`. Vì vậy
+> hướng viết `ConvLora` để bọc `dec` **hạ ưu tiên** cho luồng này — `dec` giữ đóng
+> băng tuyệt đối. (`cond`/LoRA `dec` vẫn để ngỏ cho §13.12.2B nếu sau này cần.)
+
 ---
 
 ### 13.12 🔶 Màu âm — 1 người → 1 người
@@ -1722,6 +1827,13 @@ Bỏ `flow` thì chỉ còn một nửa — và nửa đó **vẫn dùng đượ
 🔶 **Xu hướng: A trước, B sau.** A không tốn gì và đúng bằng RVC. B chỉ thêm được
 khi A cho ra kết quả chưa đủ khác giọng.
 
+> **Bổ sung — §13.6.3 (hai pha huấn luyện):** hướng A ở đây là "màu âm nằm trong
+> trọng số adapter". Cách **tổ chức** việc huấn đó có thể tách **bridge nội dung
+> dùng chung** (Pha A) khỏi **timbre riêng mỗi giọng** (Pha B, FiLM ~384 tham số).
+> Vẫn **không** dùng `dec.cond` — timbre tiêm **trên đường adapter, trước `dec`** vì
+> `dec` đã đóng băng. 1→1 vẫn giữ nguyên ở *suy luận*; hai pha chỉ là cách *huấn* để
+> nhiều giọng dùng chung bridge. Không có `emb_g`/`flow.cond_layer` nào được thêm.
+
 #### 13.12.3 ⚠️ Dữ liệu — kẹt ở đây, không nằm trong code
 
 | Hướng | Cần gì | Ta có |
@@ -1732,7 +1844,8 @@ khi A cho ra kết quả chưa đủ khác giọng.
 LJSpeech là một giọng nữ tiếng Anh — không dùng làm target cho tiếng Việt được.
 Adapter cần học cách phát ra giọng người đích từ content của người nguồn;
 **6.84 giây** (đo được từ header wav: `sr=16000`, `bits=32`, `fmt=3`, mono) là quá
-ít để học được điều đó.
+ít để học được điều đó. Các bộ dữ liệu tiếng Việt đã khảo sát (VIVOS, Common Voice
+`vi`, viVoice) nằm ở **§13.6.3**.
 
 Và vì âm thanh chỉ là **một phần nhỏ tách ra từ video** (§14), nguồn dữ liệu thực
 tế nhiều khả năng là **các video có sẵn** — trong đó có cả track phụ đề, tức là có
@@ -1996,7 +2109,7 @@ cần một quyết định kiến trúc mà đo đạc chưa trả lời đư�
 
 | # | Câu hỏi | Vì sao chặn | Mục |
 |---|---|---|---|
-| 1 | **Audio người nói đích lấy ở đâu, bao nhiêu?** | Adapter không học được gì từ 6.84 s. Đây là thứ quyết định GĐ4 làm được hay không | §13.12.3 |
+| 1 | **Audio người nói đích lấy ở đâu, bao nhiêu?** | Adapter không học được gì từ 6.84 s. Hướng đã rõ (VIVOS / Common Voice `vi` / viVoice — §13.6.3) nhưng **chưa chốt bộ cụ thể**. Đây là thứ quyết định GĐ4 làm được hay không | §13.12.3, §13.6.3 |
 | 2 | **Video nguồn có sẵn track phụ đề không?** | Nếu có → bỏ qua forced alignment. Câu hỏi tiết kiệm công lớn nhất | §14.1 |
 | 3 | ~~CC neo theo câu hay theo từ?~~ | ✅ **đã chốt: theo mệnh đề, chia ở dấu câu** | §14.5 |
 | 4 | **Sản phẩm cuối: audio + `.srt`, hay video đã ghép?** | Quyết định cần giữ thứ tự track hay không | §15.1 |
