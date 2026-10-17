@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO="${REPO:-hungpham10/voice-rs}"
-TAG="${TAG:-v2.2.10}"
+TAG="${TAG:-v2.2.11}"
 TARGET="x86_64-unknown-linux-gnu"
 
 mkdir -p bin
