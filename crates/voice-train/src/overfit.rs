@@ -97,17 +97,33 @@ pub fn train_overfit(
     }
     target_wav = resample_linear(&target_wav, sr, 22050);
 
-    // `seg` = số frame latent để huấn luyện (mặc định cả câu). Luôn co lại theo
-    // lượng dữ liệu thật (wav đích + features) để không panic khi audio ngắn.
+    // `seg`: `0` = **cả câu** (mọi frame có thể), `>0` = số frame latent. Luôn co
+    // lại theo dữ liệu thật (wav đích + features) để không panic khi audio ngắn.
     let t_wav_max = target_wav.len() / 256;
     let t_feat_max = (feats_full.dims()[2] as f64 * 86.1328125 / 50.0).floor() as usize;
-    let t_out = cfg.seg.min(t_wav_max).min(t_feat_max).max(1);
+    let t_out_full = t_wav_max.min(t_feat_max).max(1);
+    let t_out = if cfg.seg == 0 {
+        t_out_full
+    } else {
+        cfg.seg.min(t_out_full).max(1)
+    };
     let t_h = ((t_out as f64 * 50.0 / 86.1328125).round() as usize).min(feats_full.dims()[2]);
     let feats = feats_full.narrow(2, 0, t_h); // [1,768,t_h]
     let n = t_out * 256; // wav sinh ra có đúng t_out·256 mẫu
+    let origin_secs = target_wav.len() as f64 / 22050.0;
+    let train_secs = n as f64 / 22050.0;
     target_wav.truncate(n);
     let target = Tensor::<2>::from_data(TensorData::new(target_wav, [1, n]), &device);
-    println!("huấn luyện {t_out} frame latent ({t_h} frame HuBERT) · đích {n} mẫu\n");
+    println!(
+        "nguồn {origin_secs:.2} s → huấn luyện {t_out}/{t_out_full} frame latent \
+         ({t_h} frame HuBERT) = {train_secs:.2} s"
+    );
+    if t_out < t_out_full {
+        println!(
+            "⚠️  CHỈ {train_secs:.2} s đầu của {origin_secs:.2} s — dùng `--seg 0` để lấy cả câu"
+        );
+    }
+    println!();
 
     // ---- huấn luyện
     let checkpoint_path = if cfg.checkpoint_every > 0 {

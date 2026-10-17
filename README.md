@@ -85,7 +85,7 @@ lên GitHub Release khi push một tag phiên bản.
 | Binary | Crate | Việc |
 |---|---|---|
 | `embed` | `voice-hubert` | wav → features `[1,T,768]` (trọng số ContentVec **nhúng trong binary**) |
-| `voice-train` | `voice-train` | công cụ huấn luyện thống nhất: `train overfit`, `train bridge`, `eval` |
+| `voice-train` | `voice-train` | công cụ thống nhất: `train overfit`, `train bridge`, `render`, `eval` |
 | `verify_dec` | `voice-models` | validate `dec` (Rust) vs PyTorch |
 
 Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
