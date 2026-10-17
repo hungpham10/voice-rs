@@ -1,25 +1,38 @@
 //! CLI hợp nhất cho đường huấn luyện VC 1→1 (§13.6.4a).
 //!
 //! ```text
-//! voice-train train bridge --train-manifest ... --val-manifest ... [--device cpu]
-//! voice-train eval         --val-manifest ... --adapter ... [--gate gate.toml]
+//! voice-train train overfit --wav ... --feats ... [--device cpu]
+//! voice-train train bridge  --train-manifest ... --val-manifest ... [--device cpu]
+//! voice-train eval          --val-manifest ... --adapter ... [--gate gate.toml]
 //! ```
 //!
-//! `eval` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
+//! - `train overfit` = GĐ4 (overfit 1 câu, integration test) — trước là bin
+//!   `train_adapter`.
+//! - `train bridge` = Luồng 1 (cầu nối nội dung nhiều giọng).
+//! - `eval` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
+//!
+//! Cả hai lệnh `train` đều hỗ trợ **checkpoint định kỳ** (`--checkpoint-every`)
+//! và **đẩy kết quả lên HuggingFace Hub** (`--push-to-hub`, mặc định tắt).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use voice_lib::vc::Adapter;
 use voice_mel::MelConfig;
 use voice_models::dec::Generator;
 use voice_train::dataset::Dataset;
+use voice_train::hub::HubConfig;
+use voice_train::overfit::OverfitConfig;
 use voice_train::train::BridgeConfig;
-use voice_train::{device, eval, manifest, mel, train};
+use voice_train::{device, eval, manifest, mel, overfit, train};
 
 #[derive(Parser)]
-#[command(name = "voice-train", version, about = "Huấn luyện + đánh giá adapter VC 1→1")]
+#[command(
+    name = "voice-train",
+    version,
+    about = "Huấn luyện + đánh giá adapter VC 1→1"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -38,11 +51,72 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum TrainCmd {
+    /// GĐ4 — overfit 1 câu (integration test; chỉ `Adapter` học, `dec` đóng băng)
+    Overfit(OverfitArgs),
     /// Luồng 1 — cầu nối nội dung nhiều giọng (chỉ `Adapter` học, `dec` đóng băng)
     Bridge(BridgeArgs),
 }
 
-#[derive(Parser)]
+/// Tuỳ chọn đẩy kết quả lên HuggingFace Hub — **mặc định tắt**.
+#[derive(Args, Debug)]
+struct HubArgs {
+    /// Bật đẩy kết quả lên HuggingFace Hub sau khi huấn luyện.
+    #[arg(long, default_value_t = false)]
+    push_to_hub: bool,
+    /// Repo đích dạng `user/name` (bắt buộc khi bật `--push-to-hub`).
+    #[arg(long)]
+    hub_repo: Option<String>,
+    /// Token Hub (mặc định lấy biến môi trường `HF_TOKEN`).
+    #[arg(long)]
+    hf_token: Option<String>,
+    /// Tiền tố đường dẫn trong repo (vd `bridge/`); rỗng = để ở gốc.
+    #[arg(long, default_value = "")]
+    hub_prefix: String,
+}
+
+impl HubArgs {
+    fn resolve(&self) -> Result<Option<HubConfig>, String> {
+        HubConfig::resolve(
+            self.push_to_hub,
+            self.hub_repo.clone(),
+            self.hf_token.clone(),
+            self.hub_prefix.clone(),
+        )
+    }
+}
+
+#[derive(Args)]
+struct OverfitArgs {
+    #[arg(long, default_value = "sources/vits_ljs_dec")]
+    dec_dir: PathBuf,
+    /// Wav giọng đích (16 kHz mono).
+    #[arg(long, default_value = "sources/422-122949-0031.wav")]
+    wav: PathBuf,
+    /// Features ContentVec (`.npy`) của wav đích.
+    #[arg(long, default_value = "sources/features/422-122949-0031.npy")]
+    feats: PathBuf,
+    #[arg(long, default_value = "test_output.wav")]
+    out_wav: PathBuf,
+    #[arg(long, default_value = "sources/features/adapter.bpk")]
+    out_adapter: PathBuf,
+    /// Số frame latent (mặc định cả câu, tự co theo dữ liệu thật).
+    #[arg(long, default_value_t = 589)]
+    seg: usize,
+    #[arg(long, default_value_t = 300)]
+    steps: usize,
+    #[arg(long, default_value_t = 1e-3)]
+    lr: f64,
+    /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` cạnh `--out-adapter`.
+    #[arg(long, default_value_t = 0)]
+    checkpoint_every: usize,
+    /// `cpu` | `cuda` | `metal` (mặc định cpu).
+    #[arg(long, default_value = "cpu")]
+    device: String,
+    #[command(flatten)]
+    hub: HubArgs,
+}
+
+#[derive(Args)]
 struct BridgeArgs {
     /// Manifest các câu train (CSV hợp đồng).
     #[arg(long)]
@@ -69,9 +143,14 @@ struct BridgeArgs {
     val_every: usize,
     #[arg(long, default_value_t = 42)]
     seed: u64,
+    /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` trong `--out-dir`.
+    #[arg(long, default_value_t = 0)]
+    checkpoint_every: usize,
     /// `cpu` | `cuda` | `metal` (mặc định cpu).
     #[arg(long, default_value = "cpu")]
     device: String,
+    #[command(flatten)]
+    hub: HubArgs,
 }
 
 #[derive(Parser)]
@@ -120,6 +199,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Train { what } => match what {
+            TrainCmd::Overfit(a) => run_overfit(a),
             TrainCmd::Bridge(a) => run_bridge(a),
         },
         Cmd::Eval(a) => run_eval(a),
@@ -133,7 +213,44 @@ fn main() -> ExitCode {
     }
 }
 
+fn run_overfit(a: OverfitArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let hub = a.hub.resolve()?;
+    let device = device::select(&a.device)?;
+
+    let cfg = OverfitConfig {
+        dec_dir: a.dec_dir,
+        wav: a.wav,
+        feats: a.feats,
+        out_wav: a.out_wav.clone(),
+        out_adapter: a.out_adapter.clone(),
+        seg: a.seg,
+        steps: a.steps,
+        lr: a.lr,
+        checkpoint_every: a.checkpoint_every,
+    };
+    println!("== train overfit (device {}) ==", a.device);
+    let s = overfit::train_overfit(&cfg, &device)?;
+
+    // Đẩy kết quả (adapter cuối + checkpoint nếu có).
+    if let Some(hub) = &hub {
+        let mut files = vec![s.out_adapter.clone()];
+        if let Some(cp) = &s.checkpoint_path {
+            files.push(cp.clone());
+        }
+        println!("== đẩy HuggingFace Hub ({}) ==", hub.repo);
+        hub.push(&files)?;
+    }
+
+    if !(s.ratio.is_finite() && s.ratio > 1.0) {
+        eprintln!("\n❌ loss KHÔNG giảm — kiểm dữ liệu/lr");
+        return Ok(ExitCode::from(1));
+    }
+    println!("\nPASS — loss giảm {:.2}×", s.ratio);
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let hub = a.hub.resolve()?;
     let device = device::select(&a.device)?;
 
     let train_entries = manifest::read(&a.train_manifest)?;
@@ -158,6 +275,7 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         lr: a.lr,
         val_every: a.val_every,
         seed: a.seed,
+        checkpoint_every: a.checkpoint_every,
     };
     println!("== train bridge (device {}) ==", a.device);
     let s = train::train_bridge(&train_ds, &val_ds, &cfg, &device)?;
@@ -171,6 +289,24 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     println!("adapter cuối: {}", s.adapter_path.display());
     println!("adapter tốt nhất: {}", s.best_path.display());
     println!("lịch sử: {}", s.history_path.display());
+    if let Some(cp) = &s.checkpoint_path {
+        println!("checkpoint: {}", cp.display());
+    }
+
+    // Đẩy kết quả (adapter tốt nhất + cuối + lịch sử + checkpoint nếu có).
+    if let Some(hub) = &hub {
+        let mut files = vec![
+            s.best_path.clone(),
+            s.adapter_path.clone(),
+            s.history_path.clone(),
+        ];
+        if let Some(cp) = &s.checkpoint_path {
+            files.push(cp.clone());
+        }
+        println!("== đẩy HuggingFace Hub ({}) ==", hub.repo);
+        hub.push(&files)?;
+    }
+
     if !(ratio.is_finite() && ratio > 1.0) {
         eprintln!("⚠️  loss KHÔNG giảm — kiểm dữ liệu/lr (chưa tính là FAIL, chạy `eval`)");
     }
@@ -242,11 +378,10 @@ fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let t_h = Dataset::hubert_frames_for(t_out).min(utt.t_h).max(1);
             let host = ds.full_feats_channel_major(u, t_out);
             let c = utt.c;
-            let feats =
-                burn::tensor::Tensor::<3>::from_data(
-                    burn::tensor::TensorData::new(host, [1, c, t_h]),
-                    &device,
-                );
+            let feats = burn::tensor::Tensor::<3>::from_data(
+                burn::tensor::TensorData::new(host, [1, c, t_h]),
+                &device,
+            );
             let z = adapter.forward_to(feats, t_out);
             let wav = gen
                 .forward(z)
@@ -277,7 +412,10 @@ fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         baseline_val = Some(b);
         match eval::regression_fail(report.mean_mel_l1, b, a.max_regression) {
             Some(msg) => fails.push(msg),
-            None => println!("so baseline: mel_l1 {:.5} ≤ {:.5} (ok)", report.mean_mel_l1, b),
+            None => println!(
+                "so baseline: mel_l1 {:.5} ≤ {:.5} (ok)",
+                report.mean_mel_l1, b
+            ),
         }
     }
 
@@ -326,7 +464,10 @@ fn print_report(r: &eval::EvalReport) {
     println!("câu: {} · giọng: {}", r.per_utt.len(), r.per_speaker.len());
     println!("mel-L1 trung bình  : {:.5}", r.mean_mel_l1);
     println!("speaker_gap        : {:.4}", r.speaker_gap);
-    println!("rms [min, max]     : [{:.3e}, {:.3e}]", r.min_rms, r.max_rms);
+    println!(
+        "rms [min, max]     : [{:.3e}, {:.3e}]",
+        r.min_rms, r.max_rms
+    );
     println!("drift              : {:.3e}", r.drift);
     println!("speaker-similarity : N/A (cần ContentVec so sánh — Luồng 2)");
     if !r.all_finite {

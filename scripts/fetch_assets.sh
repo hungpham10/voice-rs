@@ -30,7 +30,7 @@ fetch() { # <asset-name>
 fetch voice-assets.tar.gz
 [ "${WANT_F0}" = "1" ] && fetch f0-assets.tar.gz || true
 
-# `train_adapter` mặc định đọc wav ở `sources/`; wav mẫu nằm trong repo.
+# `train overfit` mặc định đọc wav ở `sources/`; wav mẫu nằm trong repo.
 if [ ! -f sources/422-122949-0031.wav ] && [ -f samples/422-122949-0031.wav ]; then
   mkdir -p sources
   cp samples/422-122949-0031.wav sources/422-122949-0031.wav

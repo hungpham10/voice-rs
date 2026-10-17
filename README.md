@@ -76,14 +76,14 @@ Trên Colab **không cần cài Rust hay biên dịch**: binary cho Linux x86_64
 lên GitHub Release khi push một tag phiên bản.
 
 ```bash
-./scripts/fetch_bin.sh              # tải về ./bin/{embed,train_adapter,verify_dec}
+./scripts/fetch_bin.sh              # tải về ./bin/{embed,voice-train,verify_dec}
 ./scripts/run_training.sh           # dùng luôn binary, không đụng cargo
 ```
 
 | Binary | Crate | Việc |
 |---|---|---|
 | `embed` | `voice-hubert` | wav → features `[1,T,768]` (trọng số ContentVec **nhúng trong binary**) |
-| `train_adapter` | `voice-train` | huấn luyện adapter trên speaker đích |
+| `voice-train` | `voice-train` | công cụ huấn luyện thống nhất: `train overfit`, `train bridge`, `eval` |
 | `verify_dec` | `voice-models` | validate `dec` (Rust) vs PyTorch |
 
 Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
