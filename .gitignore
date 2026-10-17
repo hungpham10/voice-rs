@@ -12,6 +12,9 @@
 test_output.wav
 colab_out/
 
+# Release bundle built by .github/workflows/release-assets.yml
+voice-assets.tar.gz
+
 # OS / editor junk
 .DS_Store
 *.swp
