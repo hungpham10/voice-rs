@@ -3,12 +3,14 @@
 //! ```text
 //! voice-train train overfit --wav ... --feats ... [--device cpu]
 //! voice-train train bridge  --train-manifest ... --val-manifest ... [--device cpu]
+//! voice-train render        --feats ... --adapter ... [--out-wav render.wav]
 //! voice-train eval          --val-manifest ... --adapter ... [--gate gate.toml]
 //! ```
 //!
 //! - `train overfit` = GĐ4 (overfit 1 câu, integration test) — trước là bin
 //!   `train_adapter`.
 //! - `train bridge` = Luồng 1 (cầu nối nội dung nhiều giọng).
+//! - `render` = **suy diễn thuần** feats + adapter → wav (mặc định cả câu).
 //! - `eval` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
 //!
 //! Cả hai lệnh `train` đều hỗ trợ **checkpoint định kỳ** (`--checkpoint-every`)
@@ -25,7 +27,7 @@ use voice_train::dataset::Dataset;
 use voice_train::hub::HubConfig;
 use voice_train::overfit::OverfitConfig;
 use voice_train::train::BridgeConfig;
-use voice_train::{device, eval, manifest, mel, overfit, train};
+use voice_train::{device, eval, manifest, mel, overfit, render, train};
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +47,8 @@ enum Cmd {
         #[command(subcommand)]
         what: TrainCmd,
     },
+    /// Suy diễn: feats + adapter → wav (không huấn luyện; mặc định cả câu)
+    Render(RenderArgs),
     /// Đánh giá + cổng PASS/FAIL (mã thoát 1 khi FAIL)
     Eval(EvalArgs),
 }
@@ -55,6 +59,26 @@ enum TrainCmd {
     Overfit(OverfitArgs),
     /// Luồng 1 — cầu nối nội dung nhiều giọng (chỉ `Adapter` học, `dec` đóng băng)
     Bridge(BridgeArgs),
+}
+
+#[derive(Args)]
+struct RenderArgs {
+    #[arg(long, default_value = "sources/vits_ljs_dec")]
+    dec_dir: PathBuf,
+    /// Features ContentVec (`.npy`) — thường là của cả câu.
+    #[arg(long)]
+    feats: PathBuf,
+    /// Adapter đã huấn luyện (`.bpk`).
+    #[arg(long)]
+    adapter: PathBuf,
+    #[arg(long, default_value = "render.wav")]
+    out_wav: PathBuf,
+    /// `0` (mặc định) = cả câu; `>0` = giới hạn số frame latent.
+    #[arg(long, default_value_t = 0)]
+    seg: usize,
+    /// `cpu` | `cuda` | `metal` (mặc định cpu).
+    #[arg(long, default_value = "cpu")]
+    device: String,
 }
 
 /// Tuỳ chọn đẩy kết quả lên HuggingFace Hub — **mặc định tắt**.
@@ -99,8 +123,8 @@ struct OverfitArgs {
     out_wav: PathBuf,
     #[arg(long, default_value = "sources/features/adapter.bpk")]
     out_adapter: PathBuf,
-    /// Số frame latent (mặc định cả câu, tự co theo dữ liệu thật).
-    #[arg(long, default_value_t = 589)]
+    /// Số frame latent; `0` (mặc định) = **cả câu**, tự co theo dữ liệu thật.
+    #[arg(long, default_value_t = 0)]
     seg: usize,
     #[arg(long, default_value_t = 300)]
     steps: usize,
@@ -202,6 +226,7 @@ fn main() -> ExitCode {
             TrainCmd::Overfit(a) => run_overfit(a),
             TrainCmd::Bridge(a) => run_bridge(a),
         },
+        Cmd::Render(a) => run_render(a),
         Cmd::Eval(a) => run_eval(a),
     };
     match result {
@@ -310,6 +335,27 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if !(ratio.is_finite() && ratio > 1.0) {
         eprintln!("⚠️  loss KHÔNG giảm — kiểm dữ liệu/lr (chưa tính là FAIL, chạy `eval`)");
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_render(a: RenderArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let device = device::select(&a.device)?;
+    let cfg = render::RenderConfig {
+        dec_dir: a.dec_dir,
+        feats: a.feats,
+        adapter: a.adapter,
+        out_wav: a.out_wav,
+        seg: a.seg,
+    };
+    println!("== render (device {}) ==", a.device);
+    let s = render::render(&cfg, &device)?;
+    println!(
+        "sinh {} frame latent = {} mẫu = {:.2} s → {}",
+        s.t_out,
+        s.samples,
+        s.seconds,
+        s.out_wav.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 

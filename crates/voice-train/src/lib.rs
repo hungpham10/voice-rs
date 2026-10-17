@@ -10,6 +10,7 @@
 //! - [`device`] — chọn backend từ `--device`.
 //! - [`train`] — `train bridge` (Luồng 1).
 //! - [`overfit`] — `train overfit` (GĐ4, 1 câu).
+//! - [`render`] — `render`: suy diễn feats + adapter → wav (không huấn luyện).
 //! - [`eval`] — chỉ số + cổng PASS/FAIL.
 //! - [`hub`] — đẩy kết quả lên HuggingFace Hub (mặc định tắt).
 
@@ -21,4 +22,5 @@ pub mod hub;
 pub mod manifest;
 pub mod mel;
 pub mod overfit;
+pub mod render;
 pub mod train;

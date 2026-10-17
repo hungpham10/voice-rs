@@ -92,23 +92,33 @@ SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh
 
 Nếu `./bin/` chưa có binary, script tự rơi về `cargo run` (dành cho máy dev có Rust).
 
+> ⚠️ Mặc định `SEG=86` = **chỉ 1 giây đầu** (smoke). Muốn học **cả câu**:
+> `SEG=full STEPS=40 ./scripts/run_training.sh` (chậm hơn nhiều trên CPU).
+
 ### Biến môi trường
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `SEG` | cả câu (tự co theo dữ liệu) | số frame latent đem ra huấn luyện; `86` ≈ 1 giây |
-| `STEPS` | `300` | số bước tối ưu |
+| `SEG` | `86` (≈1 s — smoke) | số frame latent; `full`/`0` = **cả câu** |
+| `STEPS` | `250` | số bước tối ưu |
 | `LR` | `1e-3` | learning rate |
 | `WAV` | `sources/422-122949-0031.wav` | wav giọng đích |
 | `FEATS` | `sources/features/422-122949-0031.npy` | features của wav đích |
-| `DEC_DIR` | `sources/vits_ljs_dec` | thư mục trọng số `dec` |
-| `OUT_WAV` | `test_output.wav` | wav sinh ra sau train |
-| `OUT_ADAPTER` | `sources/features/adapter.bpk` | checkpoint adapter |
+| `BIN_DIR` | `bin` | thư mục binary đã tải; thiếu thì `cargo run` |
 
-Ví dụ smoke 1 giây:
-
+Ví dụ:
 ```bash
-SEG=86 STEPS=40 LR=1e-3 ./scripts/run_training.sh
+SEG=86 STEPS=40 LR=1e-3 ./scripts/run_training.sh     # smoke 1 s
+SEG=full STEPS=40      ./scripts/run_training.sh      # cả câu (chậm)
+```
+
+### Nghe lại cả câu từ adapter đã train (không train lại)
+`Adapter` là `Linear` không phụ thuộc thời gian → dùng `render` để sinh **cả câu**:
+```bash
+./bin/voice-train render \
+  --feats sources/features/422-122949-0031.npy \
+  --adapter sources/features/adapter.bpk \
+  --out-wav full.wav            # 6.84 s, không đụng weight
 ```
 
 ---

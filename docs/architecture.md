@@ -544,7 +544,7 @@ cửa sổ ±4 quanh argmax, `cents_mapping = 20·arange(360) + 1997.3794`, và
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ xong, 🔶 chờ chốt §13.4 |
 | `voice-models` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
 | `voice-lib` | **Thư viện dùng chung**: `cc` (tách dấu câu, chia frame, `.srt`) + `vc` (`Adapter` Burn P1, nội suy frame rate, resample PCM) | 🟡 logic + `Adapter` xong (**43 unit test**) |
-| `voice-train` | **Huấn luyện + validate**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`; một bin gom subcommand `train overfit` (§13.6.2), `train bridge` / `eval` (§13.6.4), kèm checkpoint định kỳ + đẩy HuggingFace Hub | ✅ nhiều giọng + gate PASS/FAIL — §13.6.4 |
+| `voice-train` | **Huấn luyện + validate + suy diễn**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`; một bin gom subcommand `train overfit` (§13.6.2), `train bridge` / `render` / `eval` (§13.6.4), kèm checkpoint định kỳ + đẩy HuggingFace Hub | ✅ nhiều giọng + gate PASS/FAIL — §13.6.4 |
 
 `voice-lib` là mục đích cho **bên ngoài** dùng; **training + validate** nằm ở
 `voice-train` — `voice-lib` không được phụ thuộc `sources/` hay build
@@ -702,8 +702,12 @@ cargo run --release -p voice-hubert --bin embed -- <wav> <out.npy>      # + ghi 
 cargo run --release -p voice-f0    --example f0_extract -- <wav>            # verify
 
 # Huấn luyện adapter overfit 1 câu (GĐ4) — cần sources/vits_ljs_dec + features + wav, xem §13.6.2
-cargo run --release -p voice-train --bin voice-train -- train overfit            # cả câu
+cargo run --release -p voice-train --bin voice-train -- train overfit            # cả câu (--seg 0)
 cargo run --release -p voice-train --bin voice-train -- train overfit --seg 86 --steps 40  # smoke 1 s
+
+# Suy diễn thuần: adapter đã train → wav cả câu (không huấn luyện lại)
+cargo run --release -p voice-train --bin voice-train -- render \
+    --feats sources/features/422-122949-0031.npy --adapter sources/features/adapter.bpk --out-wav full.wav
 
 # Luồng 1 nhiều giọng (§13.6.4) — dữ liệu qua scripts/data/ trước
 cargo run --release -p voice-hubert --bin embed_batch -- --manifest data/vivos/train.csv --skip-existing
@@ -1256,12 +1260,22 @@ Unit test `burn_mel_matches_rosa` giữ hai đường khớp: max diff `5.3e-3`,
 
 **Kết quả (đo thật):** `--seg 86` (1 s) · 40 bước → `mel-L1` `1.847 → 0.830`
 (**giảm 2.22×**, PASS). Các cờ `--seg`/`--steps`/`--lr` để smoke nhanh; đường
-dẫn cũng ghi đè được bằng `--wav`/`--feats`/`--dec-dir`/`--out-wav`/`--out-adapter`, và
-`--seg` tự kẹp về lượng dữ liệu đang có.
+dẫn cũng ghi đè được bằng `--wav`/`--feats`/`--dec-dir`/`--out-wav`/`--out-adapter`.
+
+**`--seg 0` = cả câu** (mặc định): dùng mọi frame suy được từ wav đích + features;
+`--seg N>0` giới hạn N frame đầu (mặc định `SEG=86` của `run_training.sh` = **1 s**,
+nên output chỉ còn đoạn đầu nếu quên đổi). Khi bị cắt, log in rõ
+`CHỈ x s đầu của y s — dùng --seg 0 để lấy cả câu`.
+
+**Nghe lại cả câu từ adapter đã train** (không huấn luyện lại) — `src/render.rs`,
+subcommand `render`: `feats [1,768,T_h] → Adapter.load → z → dec → wav`. Vì
+`Adapter` là `Linear` **không phụ thuộc thời gian**, adapter học trên 1 s vẫn
+forward được cả câu (`--seg 0`), chỉ là chất lượng các đoạn ngoài vùng train kém hơn.
 
 **Hiệu năng:** Flex CPU, `dec` forward+backward ở 589 frame ≈ **33 s/bước**; ở 86
-frame ≈ **4.9 s/bước** (đa luồng, ~312% CPU). Vì thế `SEG` mặc định là cả câu
-nhưng smoke nên dùng đoạn ngắn.
+frame ≈ **4.9 s/bước** (đa luồng, ~312% CPU). Vì thế `--seg 0` (cả câu) là mặc định
+đúng nghĩa, nhưng để smoke nhanh nên dùng `--seg 86`; `render` (không backward) thì
+rẻ hơn nhiều.
 
 **Bài học cold-start (đã trả giá):** adapter-only với `dec` đóng băng **không** tự
 học được nếu `dec` ra tín hiệu gần câm — gradient gần như triệt tiêu. Ở đây nguyên
@@ -1388,6 +1402,7 @@ bin vạn năng", ta có:
 voice-train  (bin `voice-train`, crate voice-train)
 ├── train overfit  # GĐ4 — overfit 1 câu (integration test), chỉ học Linear(768→192)
 ├── train bridge   # đóng băng dec, chỉ học Linear(768→192) — nhiều giọng
+├── render         # suy diễn thuần: feats + adapter → wav (mặc định cả câu; không train)
 └── eval           # chấm điểm + gate (mục g) → exit code 1 khi FAIL
 
 voice-hubert (bin `embed_batch`, crate voice-hubert)
@@ -2413,7 +2428,7 @@ lúc chạy).
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
 | `scripts/fetch_bin.sh [tag]` | tải binary đã build (`embed`, `embed_batch`, `voice-train`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
-| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`voice-train train overfit`); ưu tiên `./bin/`, thiếu thì `cargo run`. |
+| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`voice-train train overfit`); `SEG=full` để học cả câu; ưu tiên `./bin/`, thiếu thì `cargo run`. |
 | `scripts/run_bridge_training.sh` | `DATA=data/vivos ./scripts/run_bridge_training.sh` — dataset → `embed_batch` → `train bridge` → `eval` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). |
 | `scripts/data/*.py` | công cụ dev chuẩn hoá + chia dataset → CSV cho Rust đọc (§13.6.4c). |
 
