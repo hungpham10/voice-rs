@@ -7894,6 +7894,7 @@ dependencies = [
  "burn",
  "burn-onnx",
  "burn-store",
+ "clap",
  "hound",
  "rand 0.10.3",
  "serde",
@@ -7936,6 +7937,7 @@ name = "voice-train"
 version = "2.2.9"
 dependencies = [
  "burn",
+ "clap",
  "hound",
  "voice-lib",
  "voice-mel",

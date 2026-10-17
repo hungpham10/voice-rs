@@ -16,3 +16,4 @@ voice-lib = { workspace = true }
 voice-mel = { workspace = true }
 voice-models = { workspace = true }
 hound = { workspace = true }
+clap = { workspace = true }

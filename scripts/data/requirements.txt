@@ -1,0 +1,5 @@
+# Chỉ dùng cho khâu chuẩn bị dữ liệu (dev tooling) — KHÔNG thuộc runtime suy luận.
+numpy>=1.24
+soundfile>=0.12
+librosa>=0.10
+tqdm>=4.66

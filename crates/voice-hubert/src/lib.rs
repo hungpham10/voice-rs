@@ -29,6 +29,8 @@ pub mod hubert_model {
 
 use hubert_model::Model;
 
+pub mod wavio;
+
 pub type Backend = Flex;
 pub type DeviceType = Device;
 

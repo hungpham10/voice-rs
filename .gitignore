@@ -22,3 +22,4 @@ f0-assets.tar.gz
 # OS / editor junk
 .DS_Store
 *.swp
+__pycache__/

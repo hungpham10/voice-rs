@@ -112,6 +112,31 @@ SEG=86 STEPS=40 LR=1e-3 ./scripts/run_training.sh
 
 ---
 
+## 4b. Nhiều giọng — Luồng 1 (`train bridge`)
+
+Khác với `run_training.sh` (overfit **một** câu), Luồng 1 học cầu nối nội dung trên
+**nhiều giọng** và chấm điểm bằng cổng PASS/FAIL (§13.6.4). Cần dataset đã chia
+thành `train.csv`/`val.csv` bằng `scripts/data/` (Python — xem
+`scripts/data/README.md`).
+
+Trên Colab, nếu `./bin/` có `embed_batch` + `voice-train` (từ `fetch_bin.sh`) thì
+không cần Rust:
+
+```bash
+# dữ liệu đã copy lên /content/data/vivos (train.csv, val.csv, wav/, …)
+DATA=/content/data/vivos STEPS=1500 SEG=86 BATCH=8 ./scripts/run_bridge_training.sh
+```
+
+`run_bridge_training.sh` tự: sinh features (`embed_batch`) → `train bridge` →
+`eval` (thoát **mã 1** nếu FAIL). Kết quả ở `$DATA/bridge/`: `adapter_best.bpk`,
+`adapter.bpk`, `report.csv`.
+
+Đọc chỉ số `eval`: `mel-L1` (càng nhỏ càng tốt), `speaker_gap` (nhỏ = công bằng giữa
+giọng), `drift` (phải ≈ 0), RMS (bắt audio im lặng/nổ). Xem `docs/architecture.md`
+§13.6.4g.
+
+---
+
 ## 5. Dùng giọng đích của bạn
 
 `train_adapter` cần **hai** thứ khớp nhau:

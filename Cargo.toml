@@ -27,6 +27,9 @@ burn-onnx = { version = "0.22" }
 
 
 
+# CLI
+clap = { version = "4", features = ["derive"] }
+
 # Audio
 hound = "3.5"
 rosa = "=0.1.0"
