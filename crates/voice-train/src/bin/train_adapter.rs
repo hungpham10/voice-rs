@@ -13,9 +13,10 @@
 //! cargo run --release -p voice-train  --bin train_adapter
 //! ```
 //!
-//! Biến môi trường (tuỳ chọn): `SEG` = số frame latent (mặc định cả câu),
-//! `STEPS`, `LR`. Kỳ vọng: loss giảm rõ rệt, `test_output.wav` nghe giống giọng
-//! đích.
+//! Biến môi trường (tuỳ chọn): `WAV` = wav giọng đích, `FEATS` = features
+//! ContentVec của nó, `DEC_DIR`, `OUT_WAV`, `OUT_ADAPTER`; `SEG` = số frame
+//! latent (mặc định cả câu, tự co theo dữ liệu thật), `STEPS`, `LR`. Kỳ vọng:
+//! loss giảm rõ rệt, `test_output.wav` nghe giống giọng đích.
 
 use std::path::PathBuf;
 
@@ -36,13 +37,28 @@ const T_OUT: usize = 589;
 const LR: f64 = 1e-3;
 const STEPS: usize = 300;
 
+/// `std::env::var(key)` nếu có, ngược lại `default`.
+fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// `std::env::var(key).parse()` nếu có, ngược lại `default`.
+fn env_num<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dec_dir = PathBuf::from(DEC_DIR);
+    let dec_dir = PathBuf::from(env_or("DEC_DIR", DEC_DIR));
+    let wav_path = PathBuf::from(env_or("WAV", WAV));
+    let feats_path = PathBuf::from(env_or("FEATS", FEATS));
+    let out_wav = PathBuf::from(env_or("OUT_WAV", OUT_WAV));
+    let out_adapter = PathBuf::from(env_or("OUT_ADAPTER", OUT_ADAPTER));
+
     if !dec_dir.join("config.json").exists() {
-        return Err(format!("{DEC_DIR}/ chưa có — chạy ./scripts/fetch_assets.sh").into());
+        return Err(format!("{} chưa có — chạy ./scripts/fetch_assets.sh", dec_dir.display()).into());
     }
-    if !PathBuf::from(FEATS).exists() {
-        return Err(format!("{FEATS} chưa có — chạy `embed <wav> <out.npy>` trước").into());
+    if !feats_path.exists() {
+        return Err(format!("{} chưa có — chạy `embed <wav> <out.npy>` trước", feats_path.display()).into());
     }
 
     let device = Device::default().autodiff();
@@ -62,37 +78,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = voice_mel::MelConfig::ljs();
     let basis = mel::mel_basis(&cfg, &device);
 
-    let feats_full = data::features_channel_major(&PathBuf::from(FEATS), &device)?; // [1,768,T_h]
+    let feats_full = data::features_channel_major(&feats_path, &device)?; // [1,768,T_h]
     println!("features {:?}", feats_full.dims());
 
-    // `SEG` = số frame latent để huấn luyện (mặc định cả câu). Đoạn ngắn để smoke
-    // nhanh: `dec` forward+backward trên Flex CPU khá nặng ở 589 frame.
-    let t_out: usize = std::env::var("SEG")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(T_OUT);
-    let t_h = ((t_out as f64 * 50.0 / 86.1328125).round() as usize).min(feats_full.dims()[2]);
-    let feats = feats_full.narrow(2, 0, t_h); // [1,768,t_h]
-    let n = t_out * 256; // wav sinh ra có đúng t_out·256 mẫu
-
-    let (mut target_wav, sr) = data::read_wav_mono(&PathBuf::from(WAV))?;
+    let (mut target_wav, sr) = data::read_wav_mono(&wav_path)?;
     if sr != 16000 {
         eprintln!("⚠️  wav nguồn {sr} Hz, kỳ vọng 16000 Hz");
     }
     target_wav = resample_linear(&target_wav, sr, 22050);
+
+    // `SEG` = số frame latent để huấn luyện (mặc định cả câu, T_OUT). Luôn co lại
+    // theo lượng dữ liệu thật (wav đích + features) để không panic khi audio ngắn.
+    let t_wav_max = target_wav.len() / 256;
+    let t_feat_max = (feats_full.dims()[2] as f64 * 86.1328125 / 50.0).floor() as usize;
+    let t_out: usize = env_num("SEG", T_OUT)
+        .min(t_wav_max)
+        .min(t_feat_max)
+        .max(1);
+    let t_h = ((t_out as f64 * 50.0 / 86.1328125).round() as usize).min(feats_full.dims()[2]);
+    let feats = feats_full.narrow(2, 0, t_h); // [1,768,t_h]
+    let n = t_out * 256; // wav sinh ra có đúng t_out·256 mẫu
     target_wav.truncate(n);
     let target = Tensor::<2>::from_data(TensorData::new(target_wav, [1, n]), &device);
     println!("huấn luyện {t_out} frame latent ({t_h} frame HuBERT) · đích {n} mẫu\n");
 
     // ---- huấn luyện
-    let steps: usize = std::env::var("STEPS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(STEPS);
-    let lr: f64 = std::env::var("LR")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(LR);
+    let steps: usize = env_num("STEPS", STEPS);
+    let lr: f64 = env_num("LR", LR);
 
     let mut optim = burn::optim::AdamConfig::new().init();
     let mut first = f64::NAN;
@@ -128,9 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_data()
         .as_slice::<f32>()?
         .to_vec();
-    data::write_wav_mono(&PathBuf::from(OUT_WAV), &wav, 22050)?;
-    adapter.save(&PathBuf::from(OUT_ADAPTER))?;
-    println!("đã ghi {OUT_WAV} và {OUT_ADAPTER}");
+    data::write_wav_mono(&out_wav, &wav, 22050)?;
+    adapter.save(&out_adapter)?;
+    println!("đã ghi {} và {}", out_wav.display(), out_adapter.display());
 
     if !(ratio.is_finite() && ratio > 1.0) {
         eprintln!("\n❌ loss KHÔNG giảm — kiểm dữ liệu/lr");

@@ -2137,19 +2137,8 @@ từ `sources/vits_ljs_dec/*.npy` lúc chạy).
 Clone → `scripts/fetch_assets.sh` (model) → `scripts/fetch_bin.sh` (binary đã build
 sẵn) → `scripts/run_training.sh` (validation → training) → tải `test_output.wav` +
 `adapter.bpk` về. **Không cài Rust, không biên dịch** trên Colab. Chạy **CPU**
-(Colab chưa hỗ trợ GPU; xem §16.5).
-
-> ⚠️ **Thứ tự bắt buộc:** `voice-hubert/build.rs` **cần**
-> `sources/contentvec/contentvec_768l12.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
-> phải `fetch_assets` **trước** khi build — `run_training.sh` đã ép thứ tự này.
-> `voice-f0/build.rs` cũng vậy nhưng luồng này không build `voice-f0`.
-
-### 16.4 Notebook `notebooks/colab_train.ipynb`
-
-Clone → `scripts/fetch_assets.sh` (model) → `scripts/fetch_bin.sh` (binary đã build
-sẵn) → `scripts/run_training.sh` (validation → training) → tải `test_output.wav` +
-`adapter.bpk` về. **Không cài Rust, không biên dịch** trên Colab. Chạy **CPU**
-(Colab chưa hỗ trợ GPU; xem §16.5).
+(Colab chưa hỗ trợ GPU; xem §16.5). Hướng dẫn từng bước + xử lý sự cố:
+[`docs/colab-guide.md`](colab-guide.md).
 
 > ⚠️ **Thứ tự build local:** `voice-hubert/build.rs` **cần**
 > `sources/contentvec/contentvec_768l12.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên

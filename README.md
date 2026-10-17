@@ -89,6 +89,8 @@ lên GitHub Release khi push một tag phiên bản.
 Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
 (chỉ phụ thuộc `libc`/`libm`/`libgcc`, không OpenSSL hay thư viện ngoài).
 
+📖 Hướng dẫn chạy trên Colab từng bước: **[`docs/colab-guide.md`](docs/colab-guide.md)**.
+
 ## Giấy phép
 
 MIT — xem [`LICENSE`](LICENSE).
