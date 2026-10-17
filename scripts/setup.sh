@@ -64,7 +64,7 @@ cat <<'EOF'
 ✔ sẵn sàng. Bước tiếp:
   # dataset VIVOS (~1.5 GB) → hint nhanh
   python scripts/data/prepare.py vivos --download --out data/vivos --limit-per-speaker 20
-  python scripts/data/split.py data/vivos --val-ratio 0.1
+  python scripts/data/split.py --manifest data/vivos/manifest_raw.csv --out-dir data/vivos --val-ratio 0.1
 
   # smoke overfit 1 câu (nhanh)
   SEG=86 STEPS=250 ./scripts/run_training.sh
