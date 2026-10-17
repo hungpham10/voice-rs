@@ -12,6 +12,9 @@
 test_output.wav
 colab_out/
 
+# Downloaded prebuilt binaries (scripts/fetch_bin.sh)
+/bin
+
 # Release bundle built by .github/workflows/release-assets.yml
 voice-assets.tar.gz
 f0-assets.tar.gz

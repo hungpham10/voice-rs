@@ -44,3 +44,8 @@ voice-f0 = { path = "crates/voice-f0" }
 voice-models = { path = "crates/voice-models" }
 voice-lib = { path = "crates/voice-lib" }
 voice-train = { path = "crates/voice-train" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Tải BINARY đã build sẵn (cargo-dist, Linux x86_64) từ GitHub Release.
+# Dùng trên Colab để huấn luyện/validate mà KHÔNG cần cài Rust hay biên dịch.
+#
+#   ./scripts/fetch_bin.sh              # tag mặc định (xem TAG bên dưới)
+#   TAG=v0.1.0 ./scripts/fetch_bin.sh   # chọn tag khác
+#
+# Giải nén vào ./bin/{embed,train_adapter,verify_dec}.
+set -euo pipefail
+
+REPO="${REPO:-hungpham10/voice-rs}"
+TAG="${TAG:-v2.2.9}"
+TARGET="x86_64-unknown-linux-gnu"
+
+mkdir -p bin
+
+fetch_bin() { # <package> <binary-name>
+  local pkg="$1" bin="$2"
+  local asset="${pkg}-${TARGET}.tar.xz"
+  local url="https://github.com/${REPO}/releases/download/${TAG}/${asset}"
+  local tmp="${TMPDIR:-/tmp}/${asset}"
+  local stage
+  stage="$(mktemp -d)"
+
+  echo "→ ${bin}  (${asset})"
+  curl -L --fail --progress-bar -o "${tmp}" "${url}"
+  tar -xJf "${tmp}" -C "${stage}"
+  # Gói cargo-dist đặt binary ở gốc; LICENSE/README đi kèm — chỉ lấy binary.
+  mv "${stage}/${bin}" bin/
+  chmod +x "bin/${bin}"
+  rm -rf "${stage}" "${tmp}"
+}
+
+fetch_bin voice-hubert embed
+fetch_bin voice-train  train_adapter
+fetch_bin voice-models verify_dec
+
+echo "✔ binary sẵn sàng trong ./bin/"
+ls -lh bin/

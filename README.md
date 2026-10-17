@@ -34,7 +34,7 @@ crates/
 docs/architecture.md   nguồn sự thật
 notebooks/colab_train.ipynb   huấn luyện adapter trên Colab (CPU)
 samples/               audio test nhỏ, commit được
-scripts/               nạp model từ HF + chạy huấn luyện (Rust/shell; còn `screen_onnx.py` là công cụ dev)
+scripts/               nạp model/binary + chạy huấn luyện (Rust/shell; còn `screen_onnx.py` là công cụ dev)
 ```
 
 ## Chạy nhanh (local)
@@ -45,7 +45,7 @@ Cần Rust stable. Trọng số tải riêng (xem dưới).
 cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạy đúng bộ này
 
 ./scripts/fetch_assets.sh          # tải bundle model từ Release assets-v1 → sources/
-./scripts/run_training.sh          # build → validation (verify_dec) → training adapter
+./scripts/run_training.sh          # validation (verify_dec) → training adapter (tự build nếu chưa có binary)
 ```
 
 ## Model (không nằm trong git)
@@ -68,6 +68,26 @@ kèm sha256 để verify. Không còn `pretrained_ljs.pth` (`dec` đã export s�
 Python/PyTorch** ở bất kỳ bước nào.
 
 Hoặc dùng thẳng notebook `notebooks/colab_train.ipynb` — nó gọi 2 script trên.
+
+## Binary (cho Colab — không cần build)
+
+Trên Colab **không cần cài Rust hay biên dịch**: binary cho Linux x86_64 được
+[`cargo-dist`](https://opensource.axo.dev/cargo-dist/) build sẵn trong CI và đăng
+lên GitHub Release khi push một tag phiên bản.
+
+```bash
+./scripts/fetch_bin.sh              # tải về ./bin/{embed,train_adapter,verify_dec}
+./scripts/run_training.sh           # dùng luôn binary, không đụng cargo
+```
+
+| Binary | Crate | Việc |
+|---|---|---|
+| `embed` | `voice-hubert` | wav → features `[1,T,768]` (trọng số ContentVec **nhúng trong binary**) |
+| `train_adapter` | `voice-train` | huấn luyện adapter trên speaker đích |
+| `verify_dec` | `voice-models` | validate `dec` (Rust) vs PyTorch |
+
+Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
+(chỉ phụ thuộc `libc`/`libm`/`libgcc`, không OpenSSL hay thư viện ngoài).
 
 ## Giấy phép
 

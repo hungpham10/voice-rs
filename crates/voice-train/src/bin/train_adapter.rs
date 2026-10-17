@@ -9,8 +9,8 @@
 //!
 //! ```bash
 //! ./scripts/fetch_assets.sh          # nạp vits_ljs_dec + contentvec từ HF
-//! cargo run --release -p voice-hubert --example embed -- sources/422-122949-0031.wav sources/features/422-122949-0031.npy
-//! cargo run --release -p voice-train  --example train_adapter
+//! cargo run --release -p voice-hubert --bin embed -- sources/422-122949-0031.wav sources/features/422-122949-0031.npy
+//! cargo run --release -p voice-train  --bin train_adapter
 //! ```
 //!
 //! Biến môi trường (tuỳ chọn): `SEG` = số frame latent (mặc định cả câu),

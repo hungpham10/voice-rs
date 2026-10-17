@@ -392,7 +392,7 @@ struct Generator { conv_pre: Conv1d, ups: Vec<ConvTranspose1d>,
 Kết quả đo:
 
 ```
-cargo run --release -p voice-models --example verify_dec
+cargo run --release -p voice-models --bin verify_dec
 
     T     samples    mong doi  max abs diff          rms  ket qua
     1         256         256      7.392e-9     0.000738  PASS
@@ -684,7 +684,7 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 ```bash
 # ===== VITS: nạp trọng số (đã đóng băng trên HF) rồi verify =====
 ./scripts/fetch_assets.sh                                # contentvec + vits_ljs_dec từ HF
-cargo run --release -p voice-models --example verify_dec     # forward vs PyTorch
+cargo run --release -p voice-models --bin verify_dec     # forward vs PyTorch
 cargo run --release -p voice-models --example verify_backward # GĐ2: gradient
 cargo run --release -p voice-models --example verify_lora     # GĐ3: BLOCKED, xem §13.8.2
 
@@ -695,13 +695,13 @@ python3 scripts/screen_onnx.py <model.onnx>
 cargo run --release -p voice-mel --example verify_speecht5
 
 # Các tầng đã xong
-cargo run --release -p voice-hubert --example embed -- <wav>                # verify
-cargo run --release -p voice-hubert --example embed -- <wav> <out.npy>      # + ghi features [1,T,768]
+cargo run --release -p voice-hubert --bin embed -- <wav>                # verify
+cargo run --release -p voice-hubert --bin embed -- <wav> <out.npy>      # + ghi features [1,T,768]
 cargo run --release -p voice-f0    --example f0_extract -- <wav>            # verify
 
 # Huấn luyện adapter (GĐ4) — cần sources/vits_ljs_dec + features + wav, xem §13.6.2
-cargo run --release -p voice-train --example train_adapter                  # cả câu
-SEG=86 STEPS=40 cargo run --release -p voice-train --example train_adapter  # smoke 1 s
+cargo run --release -p voice-train --bin train_adapter                  # cả câu
+SEG=86 STEPS=40 cargo run --release -p voice-train --bin train_adapter  # smoke 1 s
 
 cargo build --workspace
 cargo test -p voice-lib -p voice-mel -p voice-train
@@ -2103,9 +2103,25 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 |---|---|---|
 | `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
 | `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` (HF) + verify sha256 → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. **Không Python/torch** — trọng số `vits_ljs_dec/*.npy` đã đóng băng trên HF. |
+| `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`embed`, `train_adapter`, `verify_dec`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
 
 > CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
 > khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.
+
+### 16.2.2 Phân phối binary (`cargo-dist`)
+
+`dist-workspace.toml` cấu hình `cargo-dist` chỉ build target `x86_64-unknown-linux-gnu`
+(Colab), không installer, không source-tarball — **chỉ binary thuần**. `cargo-dist` in
+**báo cáo linkage** mỗi lần build để chắc binary không dính thư viện hệ thống ngoài.
+
+**Kết quả rà phụ thuộc (quan trọng):** toàn bộ đồ thị build **không có crate `*-sys`
+nào** — backend Burn là `Flex` (thuần Rust), không OpenSSL, `libz`, glib, libtorch...
+Binary chỉ link `libc`/`libm`/`libgcc` (đều có sẵn trên mọi distro Linux) nên chạy
+được trên Colab mà không cần cài thêm gì.
+
+`embed` **nhúng trọng số ContentVec** vào binary (`VOICE_EMBED_WEIGHTS=1` → `include_bytes!`
+file `.bpk`) để binary tự chứa; vì vậy nó ~373 MB. Hai binary còn lại nhỏ (đọc `dec`
+từ `sources/vits_ljs_dec/*.npy` lúc chạy).
 
 ### 16.3 Script dùng chung
 
@@ -2113,20 +2129,32 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 |---|---|
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
-| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — build → (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`). |
+| `scripts/fetch_bin.sh [tag]` | tải binary đã build (`embed`, `train_adapter`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
+| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`); ưu tiên `./bin/`, thiếu thì `cargo run`. |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`
 
-Cài rustup → clone → `scripts/fetch_assets.sh` → `scripts/run_training.sh` → tải
-`test_output.wav` + `adapter.bpk` về. Chạy **CPU** (Colab chưa hỗ trợ GPU; xem §16.5).
+Clone → `scripts/fetch_assets.sh` (model) → `scripts/fetch_bin.sh` (binary đã build
+sẵn) → `scripts/run_training.sh` (validation → training) → tải `test_output.wav` +
+`adapter.bpk` về. **Không cài Rust, không biên dịch** trên Colab. Chạy **CPU**
+(Colab chưa hỗ trợ GPU; xem §16.5).
 
 > ⚠️ **Thứ tự bắt buộc:** `voice-hubert/build.rs` **cần**
 > `sources/contentvec/contentvec_768l12.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
 > phải `fetch_assets` **trước** khi build — `run_training.sh` đã ép thứ tự này.
 > `voice-f0/build.rs` cũng vậy nhưng luồng này không build `voice-f0`.
 
-`scripts/ljs_base.json` là bản sao nhỏ của `sources/vits/configs/ljs_base.json` để
-workflow export không cần cả cây mã nguồn VITS.
+### 16.4 Notebook `notebooks/colab_train.ipynb`
+
+Clone → `scripts/fetch_assets.sh` (model) → `scripts/fetch_bin.sh` (binary đã build
+sẵn) → `scripts/run_training.sh` (validation → training) → tải `test_output.wav` +
+`adapter.bpk` về. **Không cài Rust, không biên dịch** trên Colab. Chạy **CPU**
+(Colab chưa hỗ trợ GPU; xem §16.5).
+
+> ⚠️ **Thứ tự build local:** `voice-hubert/build.rs` **cần**
+> `sources/contentvec/contentvec_768l12.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
+> phải `fetch_assets` **trước** khi `cargo build`. Trên Colab dùng binary thì không
+> cần bước này (trọng số ContentVec đã nhúng trong `embed`).
 
 ### 16.5 Chi phí trên Colab (CPU)
 

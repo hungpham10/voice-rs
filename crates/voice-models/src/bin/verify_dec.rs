@@ -6,13 +6,14 @@
 //!   - lẻ        : T = 37, 137   → lỗi off-by-one của ConvTranspose chỉ lộ ở đây
 //!   - tròn      : T = 10, 100, 250
 //!
-//! Run: cargo run --release -p voice-models --example verify_dec
+//! Run: cargo run --release -p voice-models --bin verify_dec
 
 use std::path::PathBuf;
 
 use burn::tensor::{Device, Tensor, TensorData};
 use voice_models::dec::Generator;
 
+#[path = "../../examples/common/mod.rs"]
 mod common;
 use common::read_npz;
 
