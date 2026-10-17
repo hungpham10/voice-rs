@@ -91,7 +91,7 @@ pub struct Generator {
 }
 
 impl Generator {
-    /// Dựng cấu trúc từ `sources/vits_dec/config.json` và nạp trọng số `.npy`.
+    /// Dựng cấu trúc từ `sources/vits_ljs_dec/config.json` và nạp trọng số `.npy`.
     ///
     /// `dir` là thư mục chứa `config.json` và thư mục con `dec/`.
     pub fn load(dir: &Path, device: &Device) -> Result<Self, DecError> {

@@ -14,7 +14,7 @@ use burn::module::{Lora, Module, ParamGroup};
 use burn::tensor::Device;
 use voice_models::dec::Generator;
 
-const DIR: &str = "sources/vits_dec";
+const DIR: &str = "sources/vits_ljs_dec";
 
 /// Base được chọn cho LoRA: 4 `ups` + 12 `resblocks` × 6 conv.
 ///

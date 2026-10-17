@@ -54,8 +54,8 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 
 | Bundle | Chứa |
 |---|---|
-| `voice-assets.tar.gz` | ContentVec ONNX + `vits_dec` (VITS generator đã export) |
-| `f0-assets.tar.gz` (`--f0`) | `rmvpe.onnx` (cho `voice-f0`) |
+| `voice-assets.tar.gz` | ContentVec ONNX + `vits_ljs_dec` (VITS generator đã export) |
+| `f0-assets.tar.gz` (`--f0`) | `rmvpe_f0.onnx` (cho `voice-f0`) |
 
 **Không cần PyTorch** trên máy đích (export đã làm trong CI). Bundle kèm `SHA256SUMS`
 để `fetch_assets.sh` tự verify. Dữ liệu đích (dataset) tự tải khi cần.

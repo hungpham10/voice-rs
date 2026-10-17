@@ -192,7 +192,7 @@ phải `HiFiGANGenerator` như trong RVC. Cần phân biệt để không tra nh
 | `m_source` (NSF) | **không có** — VITS gốc không có nhánh f0 nào cả |
 
 Checkpoint có 231 tensor cho `dec`, nhưng 76 cặp `weight_g`/`weight_v` được gộp
-thành 76 tensor `weight` → còn **155 file `.npy`**. `sources/vits_dec/` nặng 56 MB.
+thành 76 tensor `weight` → còn **155 file `.npy`**. `sources/vits_ljs_dec/` nặng 56 MB.
 
 > **Điểm cần nhớ cho thiết kế adapter:** class `Generator` của VITS gốc **không
 > có `emb_pitch`, không có `m_source`** — không một ô nào liên quan cao độ. Mọi
@@ -491,7 +491,7 @@ RMVPE/RVC: 3487 frame khớp pitch_fine.npy, max abs diff 4e-4 vs torch.stft
 ```
 Repo:      IAHispano/Applio → Resources/embedders/contentvec
 Arch:      HubertModelWithFinalProj (hidden 768, 12 layers, 12 heads)
-ONNX:      sources/onnx_hubert_new/model.onnx
+ONNX:      sources/contentvec/contentvec_768l12.onnx
 Output:    [1, T, 768],  T = (len − 80) / 320  →  50 Hz @ 16 kHz
 ```
 
@@ -595,11 +595,11 @@ Thứ tự ưu tiên khi chọn model:
 ### Một hiệu chỉnh: `ConstantOfShape` không phải op chặn
 
 Bản đầu của `screen_onnx.py` xếp `ConstantOfShape` vào danh sách chặn — **sai**.
-Chạy thử trên `rmvpe.onnx` cho thấy RMVPE có `ConstantOfShape` mà vẫn import và
+Chạy thử trên `rmvpe_f0.onnx` cho thấy RMVPE có `ConstantOfShape` mà vẫn import và
 chạy tốt từ trước:
 
 ```
-rmvpe.onnx:   ConstantOfShape 1,   Expand 0   → OK
+rmvpe_f0.onnx:   ConstantOfShape 1,   Expand 0   → OK
 ```
 
 Chỉ khi output của nó đổ vào `Expand` thì mới chết. Script đã tách `FATAL`
@@ -700,7 +700,7 @@ cargo run --release -p voice-hubert --example embed -- <wav>                # ve
 cargo run --release -p voice-hubert --example embed -- <wav> <out.npy>      # + ghi features [1,T,768]
 cargo run --release -p voice-f0    --example f0_extract -- <wav>            # verify
 
-# Huấn luyện adapter (GĐ4) — cần sources/vits_dec + features + wav, xem §13.6.2
+# Huấn luyện adapter (GĐ4) — cần sources/vits_ljs_dec + features + wav, xem §13.6.2
 cargo run --release -p voice-train --example train_adapter                  # cả câu
 SEG=86 STEPS=40 cargo run --release -p voice-train --example train_adapter  # smoke 1 s
 
@@ -715,29 +715,29 @@ cargo test -p voice-lib -p voice-mel -p voice-train
 ```
 sources/
 ├── pretrained_ljs.pth      139 M   VITS LJSpeech checkpoint gốc (chỉ để export)
-├── vits_dec/                56 M   155 tensor .npy + config + ground truth
+├── vits_ljs_dec/            56 M   155 tensor .npy + config + ground truth
 ├── features/                        HuBERT features đã xuất (audio đích) — §13.6.1
 ├── vits/                            mã nguồn VITS gốc (tham chiếu)
 ├── Applio/                    54 M   mã nguồn RVC (tham chiếu)
 ├── burn/                            mã nguồn Burn 0.22 (tra LoRA/freeze)
-├── onnx_hubert_new/          360 M   ContentVec ONNX
-├── rmvpe.onnx                345 M   RMVPE ONNX (cho voice-f0)
+├── contentvec/               360 M   ContentVec-768 ONNX (HuBERT của Facebook)
+├── rmvpe_f0.onnx             345 M   RMVPE ONNX (cho voice-f0)
 ├── 422-122949-0031.wav       428 K   wav test chính (float32, 16 kHz)
 ├── ref_mel.npy                       ground truth SpeechT5
 └── Applio/logs/reference/    ground truth RVC (contentvec/feats.npy, pitch_*.npy)
 ```
 
-Các file model > 100 MB (`pretrained_ljs.pth`, `onnx_hubert_new/`, `rmvpe.onnx`)
+Các file model > 100 MB (`pretrained_ljs.pth`, `contentvec/`, `rmvpe_f0.onnx`)
 **pull từ ngoài** theo `scripts/asset_checksums.txt` — xem §16.2.
 
 Ground truth cho `dec`:
 
 | | |
 |---|---|
-| `vits_dec/ref_input.npz` | `z` cho 7 giá trị `T` ∈ {1, 2, 10, 37, 100, 137, 250} |
-| `vits_dec/ref_audio.npz` | wav tương ứng từ PyTorch |
-| `vits_dec/dec/*.npy` | 155 tensor trọng số (weight-norm đã gộp) |
-| `vits_dec/config.json` | cấu hình kiến trúc |
+| `vits_ljs_dec/ref_input.npz` | `z` cho 7 giá trị `T` ∈ {1, 2, 10, 37, 100, 137, 250} |
+| `vits_ljs_dec/ref_audio.npz` | wav tương ứng từ PyTorch |
+| `vits_ljs_dec/dec/*.npy` | 155 tensor trọng số (weight-norm đã gộp) |
+| `vits_ljs_dec/config.json` | cấu hình kiến trúc |
 
 > WAV test là **float32** (`wFormatTag = 3`), không phải PCM16. `bits` nằm ở
 > `fmt[7]`, block align ở `fmt[6]` — đọc sai là sinh toàn `-10`.
@@ -912,7 +912,7 @@ Hai tầng ở bảng đầu §13.2 không chỉ khác về tỉ lệ — chúng
 | Trong graph | `ConvTranspose` ×4, `k = 2s` | `ConvTranspose` ×5, `k=3, s=2` → ×32 |
 | Ngoài graph | — | `F.interpolate(mode="nearest")` |
 
-Đo từ `sources/rmvpe.onnx`:
+Đo từ `sources/rmvpe_f0.onnx`:
 
 ```
 ConvTranspose ×5, tất cả: k=3  stride=2  pad=1     → ×32    (100 Hz → 3200 Hz)
@@ -2072,23 +2072,23 @@ pull duy nhất (kèm sha256 + size để verify):
 
 | File | Nguồn pull | Verify |
 |---|---|---|
-| `model.onnx` (360 MB) | HF **của mình**: `hung0913208/voice-rs-assets` | sha256 `b7759e5a…` — bản ContentVec đã đo `3e-4` |
-| `rmvpe.onnx` (345 MB) | HF `TigreGotico/voiceclonnx-rvc` | sha256 `5370e71a…` khớp nguyên tử |
-| `pretrained_ljs.pth` (139 MB) | Google Drive **file id trực tiếp** `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `dec` |
+| `contentvec/contentvec_768l12.onnx` (360 MB) | HF **của mình**: `hung0913208/voice-rs-assets` | sha256 `b7759e5a…` — ContentVec-768 (HuBERT fb) đã đo `3e-4` |
+| `rmvpe_f0.onnx` (345 MB) | HF `TigreGotico/voiceclonnx-rvc/rmvpe.onnx` | sha256 `5370e71a…` khớp nguyên tử |
+| `pretrained_ljs.pth` (139 MB) | Google Drive **file id trực tiếp** `1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT` | sha256 `c94fb49d…`; chỉ để export `vits_ljs_dec` |
 
 > ⚠️ **Bản ContentVec trên `TigreGotico` KHÁC byte** với bản đã verify của mình
 > (377,755,911 vs 377,670,331 B) nên **không** dùng làm canonical. Vì vậy model được
-> upload lên HF riêng.
+> upload lên HF riêng (đổi tên `model.onnx` → `contentvec_768l12.onnx`).
 
 Từ 3 file trên, workflow đóng gói **2 bundle chỉ-model** rồi publish lên Release:
 
 ```
 voice-assets.tar.gz      # ContentVec + VITS dec (đã export) + SHA256SUMS
-├── sources/onnx_hubert_new/model.onnx
-└── sources/vits_dec/    # dec/*.npy + config.json + ref_*.npz (verify_dec)
+├── sources/contentvec/contentvec_768l12.onnx
+└── sources/vits_ljs_dec/    # dec/*.npy + config.json + ref_*.npz (verify_dec)
 
 f0-assets.tar.gz         # RMVPE (cho voice-f0) + SHA256SUMS
-└── sources/rmvpe.onnx
+└── sources/rmvpe_f0.onnx
 ```
 
 → Colab chỉ tải bundle, **không cần PyTorch** và **không cần dataset** (dữ liệu đích
@@ -2109,7 +2109,7 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 | Script | Việc |
 |---|---|
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
-| `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe.onnx`). |
+| `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
 | `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — build → (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`train_adapter`). |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`
@@ -2118,7 +2118,7 @@ Cài rustup → clone → `scripts/fetch_assets.sh` → `scripts/run_training.sh
 `test_output.wav` + `adapter.bpk` về. Chạy **CPU** (Colab chưa hỗ trợ GPU; xem §16.5).
 
 > ⚠️ **Thứ tự bắt buộc:** `voice-hubert/build.rs` **cần**
-> `sources/onnx_hubert_new/model.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
+> `sources/contentvec/contentvec_768l12.onnx` **lúc build** (nếu thiếu thì `exit(1)`), nên
 > phải `fetch_assets` **trước** khi build — `run_training.sh` đã ép thứ tự này.
 > `voice-f0/build.rs` cũng vậy nhưng luồng này không build `voice-f0`.
 

@@ -13,8 +13,8 @@ LR="${LR:-1e-3}"
 WAV="${WAV:-sources/422-122949-0031.wav}"
 FEATS="${FEATS:-sources/features/422-122949-0031.npy}"
 
-if [ ! -f sources/onnx_hubert_new/model.onnx ]; then
-  echo "✗ thiếu sources/onnx_hubert_new/model.onnx — chạy ./scripts/fetch_assets.sh trước" >&2
+if [ ! -f sources/contentvec/contentvec_768l12.onnx ]; then
+  echo "✗ thiếu sources/contentvec/contentvec_768l12.onnx — chạy ./scripts/fetch_assets.sh trước" >&2
   exit 1
 fi
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 fn main() {
     // Tell cargo to rerun if the ONNX model changes
-    let onnx_path = PathBuf::from("../../sources/rmvpe.onnx");
+    let onnx_path = PathBuf::from("../../sources/rmvpe_f0.onnx");
     println!("cargo:rerun-if-changed={}", onnx_path.display());
 
     // Check if model exists

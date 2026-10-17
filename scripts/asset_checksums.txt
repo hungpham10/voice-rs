@@ -5,11 +5,12 @@
 # khớp sha256 trước khi đóng gói bundle.
 #
 # Bằng chứng verify:
-#   model.onnx         = bản ContentVec đã đo 3e-4 trong repo, đã upload lên HF
-#                        của mình (KHÔNG dùng bản TigreGotico — khác byte).
-#   rmvpe.onnx         = sha256 LFS khớp nguyên tử TigreGotico/voiceclonnx-rvc.
-#   pretrained_ljs.pth = sha256 khớp nguyên tử bản tải từ Drive bằng gdown (file id trực tiếp);
-#                        chỉ dùng để export `vits_dec`, không nằm trong bundle.
-b7759e5a874e33a9a17369512911c1a49f3da8e504bb65ba9a8895d17e86a215  377670331  onnx_hubert_new/model.onnx  https://huggingface.co/hung0913208/voice-rs-assets/resolve/main/model.onnx
-5370e71ac80af8b4b7c793d27efd51fd8bf962de3a7ede0766dac0befa3660fd  361688443  rmvpe.onnx                  https://huggingface.co/TigreGotico/voiceclonnx-rvc/resolve/main/rmvpe.onnx
-c94fb49d08ba90c598de16e7d5dec8d26bf225c1cf193a4fba05eb2dbda5a561  145599717  pretrained_ljs.pth          https://drive.google.com/uc?id=1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT
+#   contentvec_768l12.onnx = ContentVec-768 (HuBERT của Facebook, 12 layer) đã đo 3e-4
+#                            trong repo, upload lên HF của mình (KHÔNG dùng bản
+#                            TigreGotico — khác byte).
+#   rmvpe_f0.onnx          = sha256 LFS khớp nguyên tử TigreGotico/voiceclonnx-rvc.
+#   pretrained_ljs.pth     = sha256 khớp nguyên tử bản tải từ Drive bằng gdown (file id trực tiếp);
+#                            chỉ dùng để export `vits_ljs_dec`, không nằm trong bundle.
+b7759e5a874e33a9a17369512911c1a49f3da8e504bb65ba9a8895d17e86a215  377670331  contentvec/contentvec_768l12.onnx  https://huggingface.co/hung0913208/voice-rs-assets/resolve/main/contentvec_768l12.onnx
+5370e71ac80af8b4b7c793d27efd51fd8bf962de3a7ede0766dac0befa3660fd  361688443  rmvpe_f0.onnx                        https://huggingface.co/TigreGotico/voiceclonnx-rvc/resolve/main/rmvpe.onnx
+c94fb49d08ba90c598de16e7d5dec8d26bf225c1cf193a4fba05eb2dbda5a561  145599717  pretrained_ljs.pth                   https://drive.google.com/uc?id=1q86w74Ygw2hNzYP9cWkeClGT5X25PvBT

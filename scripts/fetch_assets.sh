@@ -3,7 +3,7 @@
 # Dùng trên Colab (hoặc máy sạch) để có `sources/` mà không cần tự export.
 #
 #   ./scripts/fetch_assets.sh [tag]           # bundle chính (ContentVec + VITS dec)
-#   ./scripts/fetch_assets.sh --f0 [tag]      # lấy thêm rmvpe.onnx cho voice-f0
+#   ./scripts/fetch_assets.sh --f0 [tag]      # lấy thêm rmvpe_f0.onnx cho voice-f0
 set -euo pipefail
 
 REPO="${REPO:-hungpham10/voice-rs}"
@@ -37,5 +37,5 @@ if [ ! -f sources/422-122949-0031.wav ] && [ -f samples/422-122949-0031.wav ]; t
 fi
 
 echo "✔ sources/ sẵn sàng:"
-ls -lh sources/onnx_hubert_new/model.onnx sources/vits_dec/dec/conv_pre.weight.npy 2>/dev/null || true
-[ "${WANT_F0}" = "1" ] && ls -lh sources/rmvpe.onnx 2>/dev/null || true
+ls -lh sources/contentvec/contentvec_768l12.onnx sources/vits_ljs_dec/dec/conv_pre.weight.npy 2>/dev/null || true
+[ "${WANT_F0}" = "1" ] && ls -lh sources/rmvpe_f0.onnx 2>/dev/null || true

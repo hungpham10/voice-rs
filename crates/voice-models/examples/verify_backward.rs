@@ -27,7 +27,7 @@ use voice_models::dec::Generator;
 mod common;
 use common::read_npz;
 
-const DIR: &str = "sources/vits_dec";
+const DIR: &str = "sources/vits_ljs_dec";
 const T: usize = 10;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

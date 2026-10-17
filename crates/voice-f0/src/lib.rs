@@ -1,6 +1,6 @@
 //! voice-f0 — RMVPE pitch extractor via burn-onnx codegen.
 //!
-//! The ONNX model is expected at `sources/rmvpe.onnx` (E2E-only: mel [128,T] -> salience [360,T]).
+//! The ONNX model is expected at `sources/rmvpe_f0.onnx` (E2E-only: mel [128,T] -> salience [360,T]).
 
 use burn::backend::Flex;
 use burn::tensor::{Tensor, Device, Float, TensorData};
@@ -9,9 +9,9 @@ use std::path::Path;
 use thiserror::Error;
 
 // Include the generated model code from OUT_DIR
-// The model is named after the ONNX file (rmvpe.onnx -> rmvpe.rs)
+// Tên module lấy theo tên file ONNX: rmvpe_f0.onnx -> rmvpe_f0.rs
 pub mod rmvpe_model {
-    include!(concat!(env!("OUT_DIR"), "/model/rmvpe.rs"));
+    include!(concat!(env!("OUT_DIR"), "/model/rmvpe_f0.rs"));
 }
 use rmvpe_model::Model;
 
@@ -32,12 +32,12 @@ impl Rmvpe {
     pub fn new() -> Result<Self, F0Error> {
         let device = Device::default();
 
-        // Build script writes .bpk into OUT_DIR (same directory as generated model.rs)
-        // The ONNX file is rmvpe.onnx, so the model is named rmvpe
-        let bpk = Path::new(env!("OUT_DIR")).join("model/rmvpe.bpk");
+        // Build script writes .bpk into OUT_DIR (same directory as generated model code)
+        // The ONNX file is rmvpe_f0.onnx, so the model is named rmvpe_f0
+        let bpk = Path::new(env!("OUT_DIR")).join("model/rmvpe_f0.bpk");
         if !bpk.exists() {
             return Err(F0Error::ModelNotFound(format!(
-                "{} — run `cargo build` so the build script generates it from rmvpe.onnx",
+                "{} — run `cargo build` so the build script generates it from rmvpe_f0.onnx",
                 bpk.display()
             )));
         }

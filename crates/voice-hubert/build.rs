@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 fn main() {
     // Tell cargo to rerun if the ONNX model changes
-    let onnx_path = PathBuf::from("../../sources/onnx_hubert_new/model.onnx");
+    let onnx_path = PathBuf::from("../../sources/contentvec/contentvec_768l12.onnx");
     println!("cargo:rerun-if-changed={}", onnx_path.display());
 
     let _out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

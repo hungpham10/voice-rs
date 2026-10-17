@@ -1,6 +1,6 @@
 //! Verify generator VITS (`dec`) viết tay bằng Burn với PyTorch.
 //!
-//! Đối chiếu `sources/vits_dec/ref_audio.npz` (sinh bởi
+//! Đối chiếu `sources/vits_ljs_dec/ref_audio.npz` (sinh bởi
 //! `scripts/export_vits_dec.py`) trên 7 giá trị `T`:
 //!   - biên dưới : T = 1, 2      → bắt lỗi ở kích thước tối thiểu
 //!   - lẻ        : T = 37, 137   → lỗi off-by-one của ConvTranspose chỉ lộ ở đây
@@ -16,7 +16,7 @@ use voice_models::dec::Generator;
 mod common;
 use common::read_npz;
 
-const DIR: &str = "sources/vits_dec";
+const DIR: &str = "sources/vits_ljs_dec";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(DIR);

@@ -35,7 +35,7 @@ import torch
 
 CKPT = "sources/pretrained_ljs.pth"
 HPS = "sources/vits/configs/ljs_base.json"
-OUT = "sources/vits_dec"
+OUT = "sources/vits_ljs_dec"
 
 # ---------------------------------------------------------------- weight-norm
 

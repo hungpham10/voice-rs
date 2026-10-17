@@ -57,9 +57,9 @@ jobs:
             ls -lh "$out"
           }
           # main: ContentVec + VITS dec (đã export + ground truth ref_*.npz để verify)
-          make_bundle voice-assets.tar.gz .pkg-main sources/onnx_hubert_new sources/vits_dec
+          make_bundle voice-assets.tar.gz .pkg-main sources/contentvec sources/vits_ljs_dec
           # f0: RMVPE
-          make_bundle f0-assets.tar.gz .pkg-f0 sources/rmvpe.onnx
+          make_bundle f0-assets.tar.gz .pkg-f0 sources/rmvpe_f0.onnx
 
       - name: Publish lên Release
         env:

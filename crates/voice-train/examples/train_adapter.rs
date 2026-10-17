@@ -5,7 +5,7 @@
 //! 22.05 kHz (wav đích 16 kHz được resample lên ngoài mạng, §13.2.1).
 //!
 //! Đây là một **integration test**, không phải unit test — chạy thật, cần
-//! `sources/vits_dec/` + wav + features:
+//! `sources/vits_ljs_dec/` + wav + features:
 //!
 //! ```bash
 //! python3 scripts/export_vits_dec.py
@@ -25,7 +25,7 @@ use voice_lib::vc::{resample_linear, Adapter};
 use voice_models::dec::Generator;
 use voice_train::{data, mel};
 
-const DEC_DIR: &str = "sources/vits_dec";
+const DEC_DIR: &str = "sources/vits_ljs_dec";
 const WAV: &str = "sources/422-122949-0031.wav";
 const FEATS: &str = "sources/features/422-122949-0031.npy";
 const OUT_WAV: &str = "test_output.wav";
