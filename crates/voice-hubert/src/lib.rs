@@ -131,7 +131,7 @@ impl HubertEmbedder {
         let bpk_path = Path::new(env!("OUT_DIR")).join("model/contentvec_768l12.bpk");
         if !bpk_path.exists() {
             return Err(HubError::ModelNotFound(format!(
-                "{} — run `cargo build` so the build script generates it from model.onnx",
+                "{} — run `cargo build` so the build script generates it from contentvec_768l12.onnx",
                 bpk_path.display()
             )));
         }

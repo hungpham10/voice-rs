@@ -4,7 +4,9 @@
 # Workflow .github/workflows/release-assets.yml kéo đúng các file này và PHẢI
 # khớp sha256 trước khi đóng gói bundle.
 #
-# Tất cả model nằm trên HF của mình: https://huggingface.co/hung0913208/voice-rs-assets
+# Tất cả model nguồn nằm trên HF của mình: https://huggingface.co/hung0913208/voice-rs-assets
+# (chỉ 3 file: contentvec_768l12.onnx, rmvpe_f0.onnx, pretrained_ljs.pth).
+# `vits_ljs_dec/*.npy` KHÔNG lưu trên HF — sinh từ pth khi đóng gói.
 # Bằng chứng verify:
 #   contentvec_768l12.onnx = ContentVec-768 (HuBERT của Facebook, 12 layer) đã đo 3e-4
 #                            trong repo (KHÔNG dùng bản TigreGotico — khác byte).
