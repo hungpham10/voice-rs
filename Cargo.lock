@@ -7952,6 +7952,7 @@ dependencies = [
  "burn",
  "clap",
  "hound",
+ "rosa",
  "serde",
  "serde_json",
  "voice-lib",

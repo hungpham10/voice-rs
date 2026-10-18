@@ -17,6 +17,7 @@ voice-mel = { workspace = true }
 voice-models = { workspace = true }
 hound = { workspace = true }
 clap = { workspace = true }
+rosa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

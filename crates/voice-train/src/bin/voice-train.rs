@@ -51,6 +51,8 @@ enum Cmd {
     Render(RenderArgs),
     /// Đánh giá + cổng PASS/FAIL (mã thoát 1 khi FAIL)
     Eval(EvalArgs),
+    /// Chẩn đoán rè/nhiễu: mel-L1 theo band + voiced/unvoiced (PR-B1)
+    Diag(DiagArgs),
 }
 
 #[derive(Subcommand)]
@@ -178,8 +180,7 @@ struct BridgeArgs {
 }
 
 #[derive(Parser)]
-struct EvalArgs {
-    /// Manifest các câu val.
+struct EvalArgs {    /// Manifest các câu val.
     #[arg(long)]
     val_manifest: PathBuf,
     /// Adapter đã huấn luyện (`.bpk`).
@@ -219,6 +220,23 @@ struct EvalArgs {
     max_drift: Option<f64>,
 }
 
+/// Tham số `diag` — chẩn đoán rè giữa wav sinh ra (gen) và wav đích (target).
+#[derive(Parser)]
+struct DiagArgs {
+    /// Wav đích (ground truth, mọi sample rate — tự resample về 22.05k).
+    #[arg(long)]
+    target: PathBuf,
+    /// Wav sinh ra (từ `render`/`train overfit`, chuẩn 22.05 kHz).
+    #[arg(long)]
+    gen: PathBuf,
+    /// f0 RMVPE `.npy` @100 Hz (`[1,T]`) để tách voiced/unvoiced (tuỳ chọn).
+    #[arg(long)]
+    f0: Option<PathBuf>,
+    /// Ghi CSV từng frame: frame,overall,low,mid,high[,voiced].
+    #[arg(long)]
+    out_csv: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
@@ -228,6 +246,7 @@ fn main() -> ExitCode {
         },
         Cmd::Render(a) => run_render(a),
         Cmd::Eval(a) => run_eval(a),
+        Cmd::Diag(a) => run_diag(a),
     };
     match result {
         Ok(code) => code,
@@ -503,6 +522,33 @@ fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Ok(ExitCode::from(1))
     }
+}
+
+fn run_diag(a: DiagArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let device = voice_train::device::select("cpu")?;
+    let (sum, rows) = voice_train::diag::diagnose(
+        &a.target,
+        &a.gen,
+        a.f0.as_deref(),
+        &device,
+    )?;
+    sum.print();
+    if let Some(path) = &a.out_csv {
+        voice_train::diag::write_csv(path, &rows, a.f0.is_some())?;
+        println!("đã ghi {} frame → {}", rows.len(), path.display());
+    }
+    // Heuristic đọc nhanh: voiced lệch nhiều hơn unvoiced → nghi thiếu excitation (NSF);
+    // mọi band + unvoiced đều lệch → z ngoài manifold (bridge).
+    match (sum.voiced, sum.unvoiced) {
+        (Some(v), Some(u)) if v > 2.0 * u && v > 0.3 => {
+            println!("\n🔑 voiced ≫ unvoiced — nghi THIẾU EXCITATION → NSF là hướng đúng (§13.4.1)");
+        }
+        (Some(_), Some(u)) if u > 0.3 && sum.bands.iter().all(|(_, x)| *x > 0.3) => {
+            println!("\n🔑 mọi band + unvoiced đều lệch — nghi Z NGOÀI MANIFOLD (bridge) — NSF không phải nút thắt chính");
+        }
+        _ => {} // không đủ dữ liệu để quyết — đọc bảng manual
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn print_report(r: &eval::EvalReport) {
