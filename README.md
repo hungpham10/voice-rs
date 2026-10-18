@@ -17,7 +17,7 @@ Tài liệu kiến trúc đầy đủ (nguồn sự thật duy nhất): **[`docs
 | `voice-hubert` | ContentVec 768 @ 50 Hz | ✅ max abs diff `3e-4` |
 | `voice-mel` | log-mel (nhiều variant) | ✅ `4.77e-07` |
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ mean diff `1.78 Hz` |
-| `voice-models` | VITS HiFi-GAN generator (`dec`), viết tay | ✅ `1.26e-08` vs PyTorch |
+| `voice-vits` | VITS HiFi-GAN generator (`dec`), viết tay | ✅ `1.26e-08` vs PyTorch |
 | `voice-lib` | Thư viện dùng chung: `cc` (dấu câu, frame, `.srt`) + `vc` (`Adapter`, resample) | 🟡 43 unit test |
 | `voice-train` | Một lệnh `voice`: embed/train/validate/generate/diag (log-mel khả vi bằng Burn) | 🟡 loss giảm `2.22×`/40 bước |
 
@@ -28,7 +28,7 @@ crates/
 ├── voice-hubert/   ContentVec embedder (ONNX) — 768 @ 50 Hz
 ├── voice-mel/      log-mel variants (rosa-based)
 ├── voice-f0/       RMVPE f0 @ 100 Hz (ONNX)
-├── voice-models/   VITS HiFi-GAN `dec` viết tay bằng Burn
+├── voice-vits/   VITS HiFi-GAN `dec` viết tay bằng Burn
 ├── voice-lib/      thư viện dùng chung (cho bên ngoài)
 └── voice-train/    bin `voice` — embed/train/validate/generate/diag (không kéo vào voice-lib)
 docs/architecture.md   nguồn sự thật
@@ -43,7 +43,7 @@ Cần Rust stable. Trọng số tải riêng (xem dưới).
 
 ```bash
 ./scripts/setup.sh --no-bin    # MỘT lệnh: model (sources/) + phụ thuộc Python (máy dev bỏ qua binary)
-cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạy đúng bộ này
+cargo test -p voice-lib -p voice-mel -p voice-vits -p voice-train   # CI chạy đúng bộ này
 ./scripts/run_training.sh      # embed → train → validate (tự build nếu chưa có binary)
 # ./voice verify               # kiểm tra dec vs PyTorch (bước riêng trước khi train)
 ```

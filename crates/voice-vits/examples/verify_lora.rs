@@ -6,13 +6,13 @@
 //!      tensor trong record, không tin regex
 //!   3. Số tham số LoRA nhỏ hơn base rất nhiều
 //!
-//! Run: cargo run --release -p voice-models --example verify_lora
+//! Run: cargo run --release -p voice-vits --example verify_lora
 
 use std::path::PathBuf;
 
 use burn::module::{Lora, Module, ParamGroup};
 use burn::tensor::Device;
-use voice_models::dec::Generator;
+use voice_vits::dec::Generator;
 
 const DIR: &str = "sources/vits_ljs_dec";
 

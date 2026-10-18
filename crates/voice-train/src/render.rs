@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use burn::tensor::Device;
 use voice_lib::vc::Adapter;
-use voice_models::dec::Generator;
+use voice_vits::dec::Generator;
 
 use crate::data;
 use crate::dataset::{HUBERT_HZ, LATENT_HZ, SAMPLES_PER_FRAME};

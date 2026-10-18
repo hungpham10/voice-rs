@@ -18,7 +18,7 @@ use std::path::Path;
 use burn::tensor::{Device, Tensor, TensorData};
 use voice_lib::vc::Adapter;
 use voice_mel::MelConfig;
-use voice_models::dec::Generator;
+use voice_vits::dec::Generator;
 
 use crate::dataset::Dataset;
 use crate::mel;

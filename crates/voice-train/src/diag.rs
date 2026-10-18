@@ -82,7 +82,7 @@ fn bins_of_band(cfg: &MelConfig, lo: f64, hi: f64) -> Vec<usize> {
 
 /// Đılması `f0.npy` (RMVPE @ 100 Hz): shape `[1, T]` hoặc `[1, 1, T]`.
 fn read_f0(path: &Path) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-    let (shape, flat) = voice_models::npy::read_f32(path)?;
+    let (shape, flat) = voice_vits::npy::read_f32(path)?;
     match shape.as_slice() {
         [1, _t] | [1, 1, _t] => Ok(flat),
         other => Err(format!("f0 phải là [1,T]/[1,1,T], được {other:?}").into()),

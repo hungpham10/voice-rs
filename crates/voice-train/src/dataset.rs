@@ -74,7 +74,7 @@ impl Dataset {
                 }
             };
 
-            let (shape, flat) = voice_models::npy::read_f32(Path::new(&e.feats_path))?;
+            let (shape, flat) = voice_vits::npy::read_f32(Path::new(&e.feats_path))?;
             if shape.len() != 3 || shape[0] != 1 {
                 return Err(format!("features {} phải [1,T,C], được {shape:?}", e.feats_path).into());
             }
@@ -86,7 +86,7 @@ impl Dataset {
             // f0 co-location: feats_path ".npy" → ".f0.npy" (CSV hợp đồng không đổi)
             let f0_path = Path::new(&e.feats_path).with_extension("f0.npy");
             let f0 = if f0_path.exists() {
-                let (shape, flat) = voice_models::npy::read_f32(&f0_path)?;
+                let (shape, flat) = voice_vits::npy::read_f32(&f0_path)?;
                 let _t_f0 = match shape.as_slice() {
                     [1, t] => *t,
                     other => {

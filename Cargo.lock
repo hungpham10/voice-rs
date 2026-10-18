@@ -7938,15 +7938,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "voice-models"
-version = "2.2.15"
-dependencies = [
- "burn",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "voice-train"
 version = "2.2.15"
 dependencies = [
@@ -7959,7 +7950,16 @@ dependencies = [
  "voice-hubert",
  "voice-lib",
  "voice-mel",
- "voice-models",
+ "voice-vits",
+]
+
+[[package]]
+name = "voice-vits"
+version = "2.2.15"
+dependencies = [
+ "burn",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

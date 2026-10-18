@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/voice-hubert",
     "crates/voice-mel",
-    "crates/voice-f0", "crates/voice-models",
+    "crates/voice-f0", "crates/voice-vits",
     "crates/voice-lib",
     "crates/voice-train",
 ]
@@ -44,7 +44,7 @@ ndarray = "0.16"
 voice-hubert = { path = "crates/voice-hubert" }
 voice-mel = { path = "crates/voice-mel" }
 voice-f0 = { path = "crates/voice-f0" }
-voice-models = { path = "crates/voice-models" }
+voice-vits = { path = "crates/voice-vits" }
 voice-lib = { path = "crates/voice-lib" }
 voice-train = { path = "crates/voice-train" }
 

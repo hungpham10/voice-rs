@@ -3,7 +3,7 @@
 //! §13.9 của `docs/architecture.md` mới chỉ *đọc source* khẳng định mọi op đều có
 //! backward. Ví dụ này chạy thật để kiểm chứng, đồng thời chặn NaN (bẫy §8.2).
 //!
-//! Run: cargo run --release -p voice-models --example verify_backward
+//! Run: cargo run --release -p voice-vits --example verify_backward
 //!
 //! ## Vì sao `dec.rs` không cần sửa cho ví dụ này
 //!
@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use burn::module::{Module, Param};
 use burn::tensor::{Device, Gradients, Tensor, TensorData};
-use voice_models::dec::Generator;
+use voice_vits::dec::Generator;
 
 mod common;
 use common::read_npz;
