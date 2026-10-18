@@ -19,6 +19,10 @@ use voice_models::dec::Generator;
 use crate::dataset::{Dataset, Rng, HUBERT_HZ, LATENT_HZ, SAMPLES_PER_FRAME};
 use crate::{eval, mel};
 
+/// Đáy đoạn huấn luyện (frame latent). STFT `n_fft=1024, center=true` cần tín hiệu
+/// > n_fft/2 = 512 mẫu → cần ≥ 3 frame; lấy 32 frame (~0,37 s) để loss mel ổn định.
+const MIN_SEG: usize = 32;
+
 /// Cấu hình `voice train`.
 #[derive(Debug, Clone)]
 pub struct TrainConfig {
@@ -76,9 +80,53 @@ pub fn run_training(
         .min()
         .unwrap_or(1)
         .max(1);
-    let seg = cfg.seg.min(min_latent).max(1);
+    let seg = if cfg.seg == 0 {
+        // Cả câu: lấy dài nhất có thể theo câu ngắn nhất, nhưng không dưới đáy MIN_SEG.
+        min_latent.max(MIN_SEG)
+    } else {
+        cfg.seg.max(MIN_SEG).min(min_latent)
+    };
     let t_h_seg = Dataset::hubert_frames_for(seg);
     let n = seg * SAMPLES_PER_FRAME;
+
+    // Lọc các câu quá ngắn (< seg frame latent hoặc < t_h_seg frame HuBERT) ra khỏi
+    // lấy mẫu để tránh underflow / crash STFT trên STFT reflect-pad.
+    let ineligible: Vec<usize> = (0..train_ds.utts.len())
+        .filter(|&u| {
+            let lat = train_ds.latent_len(u);
+            let t_h = train_ds.utts[u].t_h;
+            lat < seg || t_h < t_h_seg
+        })
+        .collect();
+    let ineligible_cnt = ineligible.len();
+    if ineligible_cnt > 0 {
+        println!(
+            "⚠️  bỏ {ineligible_cnt} câu quá ngắn (< {seg} frame latent) để tránh crash STFT"
+        );
+    }
+    let active: Vec<usize> = (0..train_ds.num_speakers())
+        .filter(|&s| {
+            train_ds.per_speaker[s]
+                .iter()
+                .any(|&u| !ineligible.contains(&u))
+        })
+        .collect();
+    if active.is_empty() {
+        return Err(format!(
+            "không còn câu đủ dài (≥ {seg} frame latent) để train — hãy giảm --seg hoặc bổ sung dữ liệu dài hơn"
+        )
+        .into());
+    }
+    let per_spk_active: Vec<Vec<usize>> = train_ds
+        .per_speaker
+        .iter()
+        .map(|list| {
+            list.iter()
+                .copied()
+                .filter(|&u| !ineligible.contains(&u))
+                .collect()
+        })
+        .collect();
 
     let device = device.clone().autodiff();
     let gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
@@ -96,8 +144,9 @@ pub fn run_training(
         val_ds.utts.len()
     );
     println!(
-        "seg {seg} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {} · {nspk} giọng/bước",
-        cfg.batch
+        "seg {seg} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {} · {} giọng/bước",
+        cfg.batch,
+        active.len()
     );
 
     let mel_cfg = MelConfig::ljs();
@@ -131,9 +180,9 @@ pub fn run_training(
 
         for _ in 0..cfg.batch {
             // Round-robin theo giọng → batch cân bằng bất kể số câu mỗi giọng.
-            let spk = cursor % nspk;
-            cursor = (cursor + 1) % nspk;
-            let list = &train_ds.per_speaker[spk];
+            let spk = active[cursor % active.len()];
+            cursor = (cursor + 1) % active.len();
+            let list = &per_spk_active[spk];
             let u = list[rng.below(list.len())];
             let lat = train_ds.latent_len(u);
 
@@ -231,4 +280,95 @@ fn write_history(
     }
     std::fs::write(path, s)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn::tensor::Device;
+    use crate::dataset::{Dataset, Utterance};
+    use crate::eval::per_utt_metrics;
+    use crate::mel;
+    use voice_lib::vc::Adapter;
+    use voice_mel::MelConfig;
+    use voice_models::dec::Generator;
+    use std::path::{Path, PathBuf};
+
+    fn make_utt(speaker: usize, utt_id: &str, t_h: usize) -> Utterance {
+        Utterance {
+            speaker,
+            utt_id: utt_id.to_string(),
+            t_h,
+            c: 768,
+            feats: vec![0.0f32; t_h * 768],
+            wav: vec![0.1f32; t_h * 256],
+        }
+    }
+
+    fn make_ds() -> Dataset {
+        // Một câu cực ngắn (1 frame latent = 256 mẫu) — đây là trigger của bug STFT
+        // "signal length (256) must be > n_fft/2 (512)".
+        let mut utts = vec![make_utt(0, "short", 1)];
+        for i in 0..5usize {
+            utts.push(make_utt(0, format!("long{i}").as_str(), 40));
+        }
+        let mut per_speaker = vec![Vec::new(); 1];
+        for (i, u) in utts.iter().enumerate() {
+            per_speaker[u.speaker].push(i);
+        }
+        Dataset {
+            speakers: vec!["spk0".to_string()],
+            utts,
+            per_speaker,
+        }
+    }
+
+    #[test]
+    fn seg_zero_does_not_panic_on_short_utterance() {
+        if !Path::new("sources/vits_ljs_dec/config.json").exists() {
+            eprintln!("skip: sources/vits_ljs_dec thiếu");
+            return;
+        }
+        let device = Device::flex();
+        let train_ds = make_ds();
+        let val_ds = make_ds();
+
+        let cfg = TrainConfig {
+            dec_dir: PathBuf::from("sources/vits_ljs_dec"),
+            out_dir: std::env::temp_dir().join("voice_rs_seg_test_train"),
+            seg: 0,
+            batch: 2,
+            steps: 5,
+            lr: 1e-3,
+            val_every: 5,
+            seed: 42,
+            checkpoint_every: 0,
+        };
+        let summary = run_training(&train_ds, &val_ds, &cfg, &device).expect("train không panic");
+        assert!(summary.first.is_finite());
+        assert!(summary.last.is_finite());
+        assert_eq!(summary.seg, MIN_SEG, "seg=0 với câu 1-frame phải bám đáy MIN_SEG");
+    }
+
+    #[test]
+    fn eval_skips_short_utterances() {
+        if !Path::new("sources/vits_ljs_dec/config.json").exists() {
+            eprintln!("skip: sources/vits_ljs_dec thiếu");
+            return;
+        }
+        let device = Device::flex();
+        let ds = make_ds();
+        let gen = Generator::load(&PathBuf::from("sources/vits_ljs_dec"), &device)
+            .expect("nạp dec")
+            .freeze();
+        let mel_cfg = MelConfig::ljs();
+        let basis = mel::mel_basis(&mel_cfg, &device);
+        let adapter = Adapter::new(&device).unfreeze();
+
+        let metrics = per_utt_metrics(&adapter, &gen, &ds, &mel_cfg, &basis, &device)
+            .expect("per_utt_metrics không panic");
+        // 6 câu total, 1 câu short bị bỏ → 5 câu có metric
+        assert_eq!(metrics.len(), 5, "câu 1-frame phải bị bỏ qua trong eval");
+        assert!(metrics.iter().all(|m| m.mel_l1.is_finite()));
+    }
 }

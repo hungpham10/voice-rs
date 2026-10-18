@@ -23,6 +23,10 @@ use voice_models::dec::Generator;
 use crate::dataset::Dataset;
 use crate::mel;
 
+/// Đáy đoạn cần có để tính mel-l1 (khớp MIN_SEG trong train.rs): STFT cần >
+/// n_fft/2 = 512 mẫu → ≥ 3 frame; lấy 32 frame để loss ổn định.
+const MIN_SEG: usize = 32;
+
 /// Chỉ số của một câu.
 #[derive(Debug, Clone)]
 pub struct UttMetric {
@@ -67,9 +71,15 @@ pub fn per_utt_metrics(
 ) -> Result<Vec<UttMetric>, Box<dyn std::error::Error>> {
     let c = ds.check_dims()?;
     let mut out = Vec::with_capacity(ds.utts.len());
+    let mut skipped = 0usize;
 
     for (u, utt) in ds.utts.iter().enumerate() {
-        let t_out = ds.latent_len(u).max(1);
+        let t_out = ds.latent_len(u);
+        if t_out < MIN_SEG {
+            skipped += 1;
+            continue;
+        }
+        let t_out = t_out.max(1);
         let t_h = Dataset::hubert_frames_for(t_out).min(utt.t_h).max(1);
         let host = ds.full_feats_channel_major(u, t_out);
         debug_assert_eq!(host.len(), c * t_h);
@@ -101,6 +111,9 @@ pub fn per_utt_metrics(
             samples: n,
             finite,
         });
+    }
+    if skipped > 0 {
+        eprintln!("⚠️  eval bỏ qua {skipped} câu quá ngắn (< {MIN_SEG} frame latent)");
     }
     Ok(out)
 }
