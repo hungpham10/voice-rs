@@ -76,7 +76,7 @@ cargo update --workspace --quiet
 
 # Commit (ký SSH theo qui ước repo: hung0913208@icloud.com).
 git add "$CARGO_TOML" Cargo.lock
-if [[ -n "$(git status --porcelain --cached)" ]]; then
+if [[ -n "$(git diff --cached --name-only)" ]]; then
   git commit -S -m "chore: bump version to $NEW_VERSION"
   git push origin "$BRANCH"
   echo "✅ Đã commit & push version $NEW_VERSION lên branch $BRANCH (chưa tag)."
