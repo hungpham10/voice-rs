@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `freeze()` **có** hiệu lực: chạy backward thật để chứng minh, thay vì đếm cờ.
     let z = burn::tensor::TensorData::new(vec![0.01f32; 192], [1, 192, 1]);
     let z = burn::tensor::Tensor::<3>::from_data(z, &device).require_grad();
-    let loss = adapted.forward(z).powf_scalar(2.0).sum();
+    let loss = adapted.forward(z, None, false).powf_scalar(2.0).sum();
     let mut grads = loss.backward();
     let g_base = adapted.conv_pre.weight.grad_remove(&mut grads);
 

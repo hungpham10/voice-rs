@@ -478,8 +478,8 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let basis = mel::mel_basis(&mel_cfg, &device);
 
     // Đo drift: hai lượt độc lập phải cho cùng mel-L1 (tất định).
-    let r1 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device)?;
-    let r2 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device)?;
+    let r1 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)?;
+    let r2 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)?;
     let drift = (r1.mean_mel_l1 - r2.mean_mel_l1).abs();
     let report = eval::report_from(r1.per_utt.clone(), drift);
 
@@ -538,7 +538,7 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
             );
             let z = adapter.forward_to(feats, t_out);
             let wav = gen
-                .forward(z)
+                .forward(z, None, false)
                 .reshape([1, t_out * voice_train::dataset::SAMPLES_PER_FRAME])
                 .into_data()
                 .as_slice::<f32>()?
@@ -674,7 +674,7 @@ fn run_verify(a: VerifyArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         let (ref_flat, _) = ref_a.get(*k).expect("thieu audio");
 
         let z = Tensor::from_data(TensorData::new(z_flat.clone(), [1usize, 192, t]), &device);
-        let out = gen.forward(z);
+        let out = gen.forward(z, None, false);
         let [b, c, n] = out.dims();
 
         if b != 1 || c != 1 {

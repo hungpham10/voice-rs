@@ -233,15 +233,10 @@ impl Generator {
 
     /// `z [B, 192, T]` → `wav [B, 1, T*256]`.
     ///
-    /// Đường inference cũ (không f0), tương đương `forward_full(z, None)`.
-    pub fn forward(&self, z: Tensor<3, Float>) -> Tensor<3, Float> {
-        self.forward_impl(z, None, false).0
-    }
-
-    /// `z [B, 192, T]` + f0 `[B, T]` → `wav [B, 1, T*256]` với NSF excitation
-    /// bơm sau `conv_pre`. `f0 = None` tương đương `forward()`.
-    pub fn forward_full(&self, z: Tensor<3, Float>, f0: Option<Tensor<2>>) -> Tensor<3, Float> {
-        self.forward_impl(z, f0, false).0
+    /// Nếu `f0` có giá trị (và bundle có `conv_src`), bơm excitation NSF
+    /// sau `conv_pre` (xem §13.4); `f0 = None` là đường inference cũ.
+    pub fn forward(&self, z: Tensor<3, Float>, f0: Option<Tensor<2>>, trace: bool) -> Tensor<3, Float> {
+        self.forward_impl(z, f0, trace).0
     }
 
     /// Giống [`forward`](Self::forward) nhưng trả thêm **đầu vào của `conv_post`**
@@ -437,8 +432,8 @@ mod tests {
                 &device,
             )
         };
-        let w1 = gen.forward(make_z());
-        let w2 = gen.forward_full(make_z(), None);
+        let w1 = gen.forward(make_z(), None, false);
+        let w2 = gen.forward(make_z(), None, false);
         let d1: Vec<f32> = w1.into_data().as_slice::<f32>().unwrap().to_vec();
         let d2: Vec<f32> = w2.into_data().as_slice::<f32>().unwrap().to_vec();
         assert_eq!(d1, d2, "forward_full(z, None) phải giống forward(z)");
@@ -459,7 +454,7 @@ mod tests {
             &device,
         );
         let f0 = Tensor::<2>::from_data(TensorData::new(vec![220.0f32; 4], [1, 4]), &device);
-        let wav = gen.forward_full(z, Some(f0));
+        let wav = gen.forward(z, Some(f0), false);
         let d: Vec<f32> = wav.into_data().as_slice::<f32>().unwrap().to_vec();
         assert_eq!(d.len(), 4 * 256);
         assert!(d.iter().all(|v| v.is_finite()), "wav phải finite");
