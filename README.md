@@ -44,7 +44,8 @@ Cần Rust stable. Trọng số tải riêng (xem dưới).
 ```bash
 ./scripts/setup.sh --no-bin    # MỘT lệnh: model (sources/) + phụ thuộc Python (máy dev bỏ qua binary)
 cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạy đúng bộ này
-./scripts/run_training.sh      # validation (verify_dec) → training adapter (tự build nếu chưa có binary)
+./scripts/run_training.sh      # embed → train → validate (tự build nếu chưa có binary)
+# ./voice verify               # kiểm tra dec vs PyTorch (bước riêng trước khi train)
 ```
 
 > Trên Colab (không có Rust) dùng `./scripts/setup.sh` — tự tải thêm binary Linux
@@ -104,8 +105,7 @@ lên GitHub Release khi push một tag phiên bản.
 
 | Binary | Crate | Việc |
 |---|---|---|
-| `voice` | `voice-train` | **một lệnh**: `embed` (wav → features `[1,T,768]`, trọng số ContentVec nhúng trong binary), `train`, `validate`, `generate`, `diag` |
-| `verify_dec` | `voice-models` | validate `dec` (Rust) vs PyTorch |
+| `voice` | `voice-train` | **một lệnh**: `embed` (wav → features `[1,T,768]`, trọng số ContentVec nhúng trong binary), `train`, `validate`, `generate`, `diag`, `verify` (`dec` vs PyTorch) |
 
 Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
 (chỉ phụ thuộc `libc`/`libm`/`libgcc`, không OpenSSL hay thư viện ngoài).

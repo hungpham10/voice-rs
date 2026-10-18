@@ -362,7 +362,7 @@ trọng số adapter, đúng kiểu RVC) là hướng rẻ nhất và không c�
 
 `crates/voice-models/src/dec.rs` (~250 dòng, Burn tay) +
 `crates/voice-models/src/npy.rs` (đọc `.npy`) +
-`crates/voice-models/examples/verify_dec.rs`.
+`crates/voice-train/src/bin/voice.rs` (subcommand `verify`).
 
 Cấu trúc Rust hiện tại:
 
@@ -394,7 +394,7 @@ struct Generator { conv_pre: Conv1d, ups: Vec<ConvTranspose1d>,
 Kết quả đo:
 
 ```
-cargo run --release -p voice-models --bin verify_dec
+cargo run --release -p voice-train --bin voice -- verify
 
     T     samples    mong doi  max abs diff          rms  ket qua
     1         256         256      7.392e-9     0.000738  PASS
@@ -666,7 +666,7 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 | `voice-f0` | ✅ mean diff `1.78 Hz` |
 | `voice-models` (VITS `dec`, viết tay) | ✅ **max abs diff `1.26e-08`** trên 7 giá trị T |
 | ~~`voice-models` (SpeechT5 HiFi-GAN)~~ | 🗑️ **đã xoá** — đường cũ, kéo theo `model.rs` 13 065 dòng (§6) |
-| `dec.rs` → `#[derive(Module)]` | ✅ GĐ1 — `verify_dec` vẫn `1.26e-08` |
+| `dec.rs` → `#[derive(Module)]` | ✅ GĐ1 — `voice verify` vẫn `1.26e-08` |
 | backward trên `Autodiff<Flex>` | ✅ GĐ2 — 6/6 gradient ≠ 0, finite; khớp tay `5.8e-09` |
 | `ParamGroup` + regex chọn block | ✅ khớp **76/76** tensor |
 | `freeze()` base | ✅ có hiệu lực thật (chạy backward xác nhận) |
@@ -686,7 +686,7 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 ```bash
 # ===== VITS: nạp trọng số (đã đóng băng trên HF) rồi verify =====
 ./scripts/fetch_assets.sh                                # contentvec + vits_ljs_dec từ HF
-cargo run --release -p voice-models --bin verify_dec     # forward vs PyTorch
+cargo run --release -p voice-train --bin voice -- verify     # forward vs PyTorch
 cargo run --release -p voice-models --example verify_backward # GĐ2: gradient
 cargo run --release -p voice-models --example verify_lora     # GĐ3: BLOCKED, xem §13.8.2
 
@@ -2434,7 +2434,7 @@ Từ các model trên, workflow đóng gói **2 bundle chỉ-model** rồi publi
 ```
 voice-assets.tar.gz      # ContentVec + VITS dec (đã export) + SHA256SUMS
 ├── sources/contentvec/contentvec_768l12.onnx
-└── sources/vits_ljs_dec/    # dec/*.npy + config.json + ref_*.npz (verify_dec)
+└── sources/vits_ljs_dec/    # dec/*.npy + config.json + ref_*.npz (dùng `voice verify`)
 
 f0-assets.tar.gz         # RMVPE (cho voice-f0) + SHA256SUMS
 └── sources/rmvpe_f0.onnx
@@ -2449,7 +2449,7 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 |---|---|---|
 | `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
 | `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` (HF) + verify sha256 → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. **Không Python/torch** — trọng số `vits_ljs_dec/*.npy` đã đóng băng trên HF. |
-| `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`voice`, `verify_dec`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
+| `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`voice`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
 
 > CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
 > khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.
@@ -2477,7 +2477,7 @@ lúc chạy).
 | `scripts/setup.sh [--f0] [--no-bin] [--no-deps]` | **Cài một lệnh**: model (`sources/`) + binary (`bin/`) + phụ thuộc Python; idempotent. Colab dùng thẳng, máy dev thêm `--no-bin`. |
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
-| `scripts/fetch_bin.sh [tag]` | tải binary đã build (`voice`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
+| `scripts/fetch_bin.sh [tag]` | tải binary đã build (`voice`) → `./bin/`, verify qua GitHub Release. |
 | `scripts/run_training.sh` | `DATA=data/vivos ./scripts/run_training.sh` — đường huấn luyện duy nhất: `voice embed` → `voice train` → `voice validate` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). |
 | `scripts/data/*.py` | công cụ dev chuẩn hoá + chia dataset → CSV cho Rust đọc (§13.6.4c). |
 
