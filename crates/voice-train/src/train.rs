@@ -132,7 +132,7 @@ pub fn run_training(
         .collect();
 
     let device = device.clone().autodiff();
-    let device_eval = Device::flex(); // CPU, không autodiff → forward eval không dựng graph gradient
+    let device_eval = Device::flex(); // CPU (Flex) — eval luôn tách khỏi GPU, tránh OOM CUDA khi train --device cuda
     let mut gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
     let gen_eval = Generator::load(&cfg.dec_dir, &device_eval)?.freeze();
 
@@ -187,6 +187,7 @@ pub fn run_training(
 
     let mel_cfg = MelConfig::ljs();
     let basis = mel::mel_basis(&mel_cfg, &device);
+    let basis_eval = mel::mel_basis(&mel_cfg, &device_eval);
 
     let mut optim = AdamConfig::new().init();
     let mut rng = Rng::new(cfg.seed);
@@ -279,7 +280,7 @@ pub fn run_training(
         let do_val =
             cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
-            let report = eval::evaluate(&adapter, &gen_eval, val_ds, &mel_cfg, &basis, &device, &device_eval)?;
+            let report = eval::evaluate(&adapter, &gen_eval, val_ds, &mel_cfg, &basis_eval, &device_eval, &device_eval)?;
             let improved = report.mean_mel_l1 < best_val;
             if improved {
                 best_val = report.mean_mel_l1;

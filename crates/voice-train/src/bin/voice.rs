@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use burn::tensor::{Tensor, TensorData};
+use burn::tensor::{Device, Tensor, TensorData};
 use clap::{Args, Parser, Subcommand};
 use voice_lib::vc::Adapter;
 use voice_mel::MelConfig;
@@ -468,18 +468,19 @@ fn run_generate(a: GenerateArgs) -> Result<ExitCode, Box<dyn std::error::Error>>
 }
 
 fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let device = device::select(&a.device)?;
+    // Ép eval chạy CPU để tránh OOM CUDA khi --device cuda (train giữ device yêu cầu).
+    let device_eval = Device::flex();
 
     let entries = manifest::read(&a.val_manifest)?;
     let ds = Dataset::load(&entries)?;
-    let adapter = Adapter::load(&a.adapter, &device)?;
-    let gen = Generator::load(&a.dec_dir, &device)?;
+    let adapter = Adapter::load(&a.adapter, &device_eval)?;
+    let gen = Generator::load(&a.dec_dir, &device_eval)?;
     let mel_cfg = MelConfig::ljs();
-    let basis = mel::mel_basis(&mel_cfg, &device);
+    let basis = mel::mel_basis(&mel_cfg, &device_eval);
 
     // Đo drift: hai lượt độc lập phải cho cùng mel-L1 (tất định).
-    let r1 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)?;
-    let r2 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)?;
+    let r1 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device_eval, &device_eval)?;
+    let r2 = eval::evaluate(&adapter, &gen, &ds, &mel_cfg, &basis, &device_eval, &device_eval)?;
     let drift = (r1.mean_mel_l1 - r2.mean_mel_l1).abs();
     let report = eval::report_from(r1.per_utt.clone(), drift);
 
@@ -534,7 +535,7 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let c = utt.c;
             let feats = burn::tensor::Tensor::<3>::from_data(
                 burn::tensor::TensorData::new(host, [1, c, t_h]),
-                &device,
+                &device_eval,
             );
             let z = adapter.forward_to(feats, t_out);
             let wav = gen

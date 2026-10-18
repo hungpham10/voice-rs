@@ -102,7 +102,7 @@ mod tests {
     use burn::tensor::TensorData;
 
     fn device() -> Device {
-        Device::default()
+        Device::flex() // CPU cố định — feature `cuda` unified trong workspace không được ảnh hưởng tới test
     }
 
     fn ramp(rows: usize, cols: usize) -> Tensor<3, Float> {
