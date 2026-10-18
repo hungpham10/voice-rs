@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .mul_scalar(0.03125);
 
     // ---- forward
-    let wav = gen.forward(z);
+    let wav = gen.forward(z, None, false);
     let [b, c, n] = wav.dims();
     assert_eq!((b, c, n), (1, 1, T * 256), "sai shape sau forward");
     println!("forward OK: wav [1, 1, {n}]");

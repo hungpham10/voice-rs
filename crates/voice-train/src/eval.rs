@@ -63,11 +63,12 @@ pub struct EvalReport {
 /// Tính chỉ số từng câu (một lượt sinh). Dùng lại cho cả `evaluate` và `train`.
 pub fn per_utt_metrics(
     adapter: &Adapter,
-    gen: &Generator,
+    gen_eval: &Generator,
     ds: &Dataset,
     cfg: &MelConfig,
     basis: &Tensor<2>,
     device: &Device,
+    device_eval: &Device,
 ) -> Result<Vec<UttMetric>, Box<dyn std::error::Error>> {
     let c = ds.check_dims()?;
     let mut out = Vec::with_capacity(ds.utts.len());
@@ -87,10 +88,11 @@ pub fn per_utt_metrics(
         let feats = Tensor::<3>::from_data(TensorData::new(host, [1, c, t_h]), device);
         let z = adapter.forward_to(feats, t_out);
         let n = t_out * crate::dataset::SAMPLES_PER_FRAME;
-        let wav = gen.forward(z).reshape([1, n]);
+        let z_eval = z.to_device(device_eval);
+        let wav = gen_eval.forward(z_eval, None, false).reshape([1, n]);
 
         let (target_host, _) = ds.segment_wav(u, 0, t_out);
-        let target = Tensor::<2>::from_data(TensorData::new(target_host, [1, n]), device);
+        let target = Tensor::<2>::from_data(TensorData::new(target_host, [1, n]), device_eval);
 
         let lv: f64 = mel::mel_l1(wav.clone(), target, cfg, basis)
             .into_scalar::<f32>() as f64;
@@ -176,14 +178,15 @@ pub fn report_from(per_utt: Vec<UttMetric>, drift: f64) -> EvalReport {
 /// Một lượt eval đầy đủ (drift = 0; người gọi chạy lại để đo drift).
 pub fn evaluate(
     adapter: &Adapter,
-    gen: &Generator,
+    gen_eval: &Generator,
     ds: &Dataset,
     cfg: &MelConfig,
     basis: &Tensor<2>,
     device: &Device,
+    device_eval: &Device,
 ) -> Result<EvalReport, Box<dyn std::error::Error>> {
     Ok(report_from(
-        per_utt_metrics(adapter, gen, ds, cfg, basis, device)?,
+        per_utt_metrics(adapter, gen_eval, ds, cfg, basis, device, device_eval)?,
         0.0,
     ))
 }

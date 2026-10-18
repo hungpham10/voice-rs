@@ -1,6 +1,6 @@
 //! F0 decode: salience [360, T] -> f0 [T]
 
-use burn::tensor::{Tensor, Float};
+use burn::tensor::{Tensor, Float, TensorData};
 
 pub const N_CLASS: usize = 360;
 pub const THRED: f32 = 0.03; // Applio's filter_radius, NOT 0.5 from paper

@@ -91,7 +91,7 @@ pub fn render(
     let z = adapter.forward_to(feats, t_out); // [1,192,t_out]
     let samples = t_out * SAMPLES_PER_FRAME;
     let wav = gen
-        .forward(z)
+        .forward(z, None, false)
         .reshape([1, samples])
         .into_data()
         .as_slice::<f32>()?

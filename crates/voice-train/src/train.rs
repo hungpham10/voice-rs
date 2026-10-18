@@ -132,7 +132,9 @@ pub fn run_training(
         .collect();
 
     let device = device.clone().autodiff();
+    let device_eval = Device::flex(); // CPU, không autodiff → forward eval không dựng graph gradient
     let mut gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
+    let gen_eval = Generator::load(&cfg.dec_dir, &device_eval)?.freeze();
 
     // NSF-lite: unfreeze conv_src (chỉ có khi bundle có conv_src.npy).
     if cfg.nsf {
@@ -255,7 +257,7 @@ pub fn run_training(
         };
 
         let z = adapter.forward_to(feats, seg);
-        let wav = gen.forward_full(z, f0_tensor).reshape([b, n]);
+        let wav = gen.forward(z, f0_tensor, false).reshape([b, n]);
         let loss = mel::mel_l1(wav, target, &mel_cfg, &basis);
 
         let lv: f64 = loss.clone().into_scalar::<f32>() as f64;
@@ -277,7 +279,7 @@ pub fn run_training(
         let do_val =
             cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
-            let report = eval::evaluate(&adapter, &gen, val_ds, &mel_cfg, &basis, &device)?;
+            let report = eval::evaluate(&adapter, &gen_eval, val_ds, &mel_cfg, &basis, &device, &device_eval)?;
             let improved = report.mean_mel_l1 < best_val;
             if improved {
                 best_val = report.mean_mel_l1;
@@ -419,7 +421,7 @@ mod tests {
         let basis = mel::mel_basis(&mel_cfg, &device);
         let adapter = Adapter::new(&device).unfreeze();
 
-        let metrics = per_utt_metrics(&adapter, &gen, &ds, &mel_cfg, &basis, &device)
+        let metrics = per_utt_metrics(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)
             .expect("per_utt_metrics không panic");
         // 6 câu total, 1 câu short bị bỏ → 5 câu có metric
         assert_eq!(metrics.len(), 5, "câu 1-frame phải bị bỏ qua trong eval");
