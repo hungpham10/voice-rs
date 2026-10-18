@@ -23,4 +23,3 @@ serde_json = { workspace = true }
 [features]
 default = []
 cuda = ["burn/cuda"]
-metal = ["burn/metal"]
