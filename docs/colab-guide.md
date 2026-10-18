@@ -48,13 +48,17 @@ Ba binary (CPU-only — build cho Colab):
 | `verify_dec` | validate `dec` (Rust) khớp PyTorch (bước kiểm tra trước khi train) |
 | `voice-train` | công cụ huấn luyện thống nhất: `train overfit` (1 câu), `train bridge` (nhiều giọng), `eval` |
 
-> **GPU (tùy chọn — không ship qua Release):**
-> Binary trên Release chỉ **CPU Linux x86_64** (dành cho Colab). Muốn GPU:
+> **GPU (tùy chọn — release đã có sẵn):**
+> Từ v2.2.12, binary `voice-train` trên Release đã build kèm feature `cuda`.
+> Một binary duy nhất cho Colab và máy có GPU:
 > ```bash
-> # NVIDIA GPU (Linux) — cần CUDA toolkit
-> cargo build --release -p voice-train --features cuda
+> # CPU (mặc định — Colab)
+> ./voice-train train overfit --device cpu ...
+> # CUDA (máy có NVIDIA GPU + driver/CUDA runtime)
+> ./voice-train train overfit --device cuda ...
 > ```
-> Binary GPU phụ thuộc thư viện hệ thống (`libcudart`) — không phù hợp cargo-dist Colab.
+> Binary GPU phụ thuộc thư viện hệ thống (`libcudart` qua `dlopen` lúc runtime) —
+> `--device cpu` vẫn chạy bình thường trên máy không có NVIDIA.
 
 ---
 

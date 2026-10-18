@@ -90,7 +90,7 @@ mod tests {
     /// sai thang.
     #[test]
     fn burn_mel_matches_rosa() {
-        let device = Device::default();
+        let device = Device::flex();
         let cfg = MelConfig::ljs();
         let n = 22050; // 1 s @ 22.05 kHz
         let x = sine(n, 22050.0);
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn mel_l1_zero_for_identical_audio() {
-        let device = Device::default();
+        let device = Device::flex();
         let cfg = MelConfig::ljs();
         let basis = mel_basis(&cfg, &device);
         let x = sine(8192, 22050.0);
@@ -140,7 +140,7 @@ mod tests {
     /// Gradient qua STFT/`log` phải finite (chặn bẫy NaN §8.2) và khác 0.
     #[test]
     fn mel_l1_gradient_is_finite_and_nonzero() {
-        let device = Device::default().autodiff();
+        let device = Device::flex().autodiff();
         let cfg = MelConfig::ljs();
         let basis = mel_basis(&cfg, &device);
 
