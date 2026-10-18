@@ -1431,10 +1431,18 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
   lại chọn lúc **compile** qua feature của crate `burn`. Nên `--device` là *ánh xạ
   compile-time*: build có feature tương ứng mới chạy được; thiếu thì **báo lỗi rõ**,
   không panic mơ hồ.
-- Mặc định **`cpu`** — khớp Colab, và `cargo-dist` hiện chỉ ship
+- Mặc định **`cpu`** (feature `default`) — khớp Colab, và `cargo-dist` hiện chỉ ship
   `x86_64-unknown-linux-gnu` CPU (§16.2.2).
-- GPU (`--device cuda`) cần **build riêng** có feature `cuda` + CUDA toolkit; đây là
-  target phân phối mới, **ngoài phạm vi** Luồng 1. Colab chưa có GPU (§16.5).
+- **GPU (`--device cuda`)**: build với `--features cuda` + CUDA toolkit:
+  ```bash
+  cargo build --release -p voice-train --features cuda  # cần GPU NVIDIA + CUDA toolkit
+  ```
+  Binary này phụ thuộc `libcudart` — **không** ship qua cargo-dist Colab (đã chỉ định
+  `x86_64-unknown-linux-gnu` CPU). Dành cho máy dev/Linux server có GPU.
+- **Metal (`--device metal`)**: macOS dev build:
+  ```bash
+  cargo build --release -p voice-train --features metal  # macOS
+  ```
 - Sanity: chạy 5 bước trên hai backend phải cho loss tương đương (khi có GPU để đối
   chiếu) — đây là một *gate* (mục g), không phải suy đoán.
 
