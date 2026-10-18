@@ -11,8 +11,8 @@ prepare.py  ──►  manifest_raw.csv        (speaker_id,utt_id,wav_path,durat
                      │  (mọi wav đã 16 kHz mono, ở <out>/wav/)
    split.py   ──►  train.csv / val.csv   (hợp đồng 6 cột cho Rust)
                      │  (feats_path = <out>/features/<utt_id>.npy)
- embed_batch  ──►  <out>/features/*.npy
- voice-train   ──► train bridge → eval (cổng PASS/FAIL)
+ voice embed  ──►  <out>/features/*.npy
+ voice         ──► train → validate (cổng PASS/FAIL)
 ```
 
 ## Cài
@@ -54,17 +54,17 @@ python scripts/data/split.py --manifest data/vivos/manifest_raw.csv \
 
 ## 3) Sinh features + huấn luyện
 
-Xem `scripts/run_bridge_training.sh` (gộp cả 3 bước), hoặc chạy tay:
+Xem `scripts/run_training.sh` (gộp cả 3 bước), hoặc chạy tay:
 
 ```bash
-cargo run --release -p voice-hubert --bin embed_batch -- --manifest data/vivos/train.csv --skip-existing
-cargo run --release -p voice-hubert --bin embed_batch -- --manifest data/vivos/val.csv   --skip-existing
-cargo run --release -p voice-train  --bin voice-train  -- train bridge \
-    --train-manifest data/vivos/train.csv --val-manifest data/vivos/val.csv \
-    --out-dir data/vivos/bridge
-cargo run --release -p voice-train  --bin voice-train  -- eval \
-    --val-manifest data/vivos/val.csv --adapter data/vivos/bridge/adapter_best.bpk
+cargo run --release -p voice-train --bin voice -- embed --manifest data/vivos/train.csv --skip-existing
+cargo run --release -p voice-train --bin voice -- embed --manifest data/vivos/val.csv   --skip-existing
+cargo run --release -p voice-train --bin voice -- train \
+  --train-manifest data/vivos/train.csv --val-manifest data/vivos/val.csv --out-dir data/vivos/bridge
+cargo run --release -p voice-train --bin voice -- validate \
+  --val-manifest data/vivos/val.csv --adapter data/vivos/bridge/adapter_best.bpk
 ```
+
 
 ## Test (tuỳ chọn)
 

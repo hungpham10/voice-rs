@@ -14,7 +14,7 @@ Quy tắc:
     `split,speaker_id,utt_id,wav_path,feats_path,duration`.
 
 `feats_path` mặc định `<out-dir>/features/<utt_id>.npy` — chính nơi
-`embed_batch` sẽ ghi features (Rust chỉ đọc, không tự đoán tên).
+`voice embed` sẽ ghi features (Rust chỉ đọc, không tự đoán tên).
 """
 
 from __future__ import annotations

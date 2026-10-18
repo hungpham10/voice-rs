@@ -7917,7 +7917,7 @@ dependencies = [
 
 [[package]]
 name = "voice-lib"
-version = "2.2.12"
+version = "2.2.13"
 dependencies = [
  "burn",
 ]
@@ -7938,7 +7938,7 @@ dependencies = [
 
 [[package]]
 name = "voice-models"
-version = "2.2.12"
+version = "2.2.13"
 dependencies = [
  "burn",
  "serde_json",
@@ -7947,7 +7947,7 @@ dependencies = [
 
 [[package]]
 name = "voice-train"
-version = "2.2.12"
+version = "2.2.13"
 dependencies = [
  "burn",
  "clap",
@@ -7955,6 +7955,7 @@ dependencies = [
  "rosa",
  "serde",
  "serde_json",
+ "voice-hubert",
  "voice-lib",
  "voice-mel",
  "voice-models",

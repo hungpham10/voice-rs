@@ -35,27 +35,26 @@ GitHub Release  assets-v1            ──►  voice-assets.tar.gz
    • sources/vits_ljs_dec/            (155 .npy + config + ref_*.npz)
 
 GitHub Release  v2.2.11  (cargo-dist)  ──►  voice-{hubert,train,models}-....tar.xz
-   • embed  ·  voice-train  ·  verify_dec   (Linux x86_64)
+   • voice  ·  verify_dec   (Linux x86_64)
 
 repo  samples/422-122949-0031.wav     ←   wav mẫu (nằm trong git)
 ```
 
-Ba binary (CPU-only — build cho Colab):
+Hai binary (build cho Colab):
 
 | Binary | Việc |
 |---|---|
-| `embed` | wav giọng đích → features ContentVec `[1,T,768]` (trọng số nhúng sẵn trong binary) |
+| `voice` | một lệnh thống nhất: `embed` / `train` / `validate` / `generate` / `diag` — trọng số ContentVec nhúng sẵn trong binary |
 | `verify_dec` | validate `dec` (Rust) khớp PyTorch (bước kiểm tra trước khi train) |
-| `voice-train` | công cụ huấn luyện thống nhất: `train overfit` (1 câu), `train bridge` (nhiều giọng), `eval` |
 
 > **GPU (tùy chọn — release đã có sẵn):**
-> Từ v2.2.12, binary `voice-train` trên Release đã build kèm feature `cuda`.
+> Binary `voice` trên Release đã build kèm feature `cuda`.
 > Một binary duy nhất cho Colab và máy có GPU:
 > ```bash
 > # CPU (mặc định — Colab)
-> ./voice-train train overfit --device cpu ...
+> ./voice train --device cpu ...
 > # CUDA (máy có NVIDIA GPU + driver/CUDA runtime)
-> ./voice-train train overfit --device cuda ...
+> ./voice train --device cuda ...
 > ```
 > Binary GPU phụ thuộc thư viện hệ thống (`libcudart` qua `dlopen` lúc runtime) —
 > `--device cpu` vẫn chạy bình thường trên máy không có NVIDIA.
@@ -71,8 +70,7 @@ Ba binary (CPU-only — build cho Colab):
    - **Cell 1** — clone repo.
    - **Cell 2** — `./scripts/fetch_assets.sh assets-v1` (tải model, verify sha256).
    - **Cell 3** — `./scripts/fetch_bin.sh` (tải binary → `./bin/`).
-   - **Cell 4** — `./scripts/run_training.sh` (validation → training).
-4. Cell 5 tải `test_output.wav` + `adapter.bpk` về máy.
+   - **Cell 4** — `run_training.sh` (embed → train → validate).
 
 ---
 
@@ -91,43 +89,42 @@ cd voice-rs
 # —— hoặc làm từng bước ——
 # ./scripts/fetch_assets.sh                 # model, verify SHA256SUMS (tag assets-v1)
 # ./scripts/fetch_assets.sh --f0            # thêm rmvpe_f0.onnx nếu cần voice-f0
-# ./scripts/fetch_bin.sh                    # binary Linux x86_64 → ./bin/ (tag v2.2.11)
+# ./scripts/fetch_bin.sh                    # binary Linux x86_64 → ./bin/
 
-# 2) validation + training
-SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh
+# 2) sinh features + training + validate (một lệnh)
+DATA=data/my ./scripts/run_training.sh
 ```
 
 `run_training.sh` sẽ tự:
-1. sinh features nếu còn thiếu (`embed`),
-2. chạy **validation** (`verify_dec`) — so `dec` với ground truth PyTorch,
-3. chạy **training** (`voice-train train overfit`) — ghi `test_output.wav` + `sources/features/adapter.bpk`.
+1. sinh features cho cả manifest còn thiếu (`voice embed --skip-existing`),
+2. chạy **training** (`voice train`) — ghi adapter + history vào `--out-dir`,
+3. chạy **validate** (`voice validate`) — cổng PASS/FAIL (thoát **mã 1** nếu FAIL).
 
 Nếu `./bin/` chưa có binary, script tự rơi về `cargo run` (dành cho máy dev có Rust).
-
-> ⚠️ Mặc định `SEG=86` = **chỉ 1 giây đầu** (smoke). Muốn học **cả câu**:
-> `SEG=full STEPS=40 ./scripts/run_training.sh` (chậm hơn nhiều trên CPU).
 
 ### Biến môi trường
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `SEG` | `86` (≈1 s — smoke) | số frame latent; `full`/`0` = **cả câu** |
-| `STEPS` | `250` | số bước tối ưu |
+| `DATA` | `data/vivos` | thư mục dataset (chứa manifest + out-dir) |
+| `TRAIN_MANIFEST` / `VAL_MANIFEST` | `$DATA/train.csv` / `$DATA/val.csv` | manifest CSV hợp đồng |
+| `OUT_DIR` | `$DATA/bridge` | nơi ghi adapter/history/report |
+| `SEG` | `86` | frame latent mỗi mẫu huấn luyện |
+| `BATCH` | `8` | số câu mỗi bước |
+| `STEPS` | `1500` | số bước tối ưu |
 | `LR` | `1e-3` | learning rate |
-| `WAV` | `sources/422-122949-0031.wav` | wav giọng đích |
-| `FEATS` | `sources/features/422-122949-0031.npy` | features của wav đích |
+| `DEVICE` | `cpu` | `cpu`/`cuda` |
 | `BIN_DIR` | `bin` | thư mục binary đã tải; thiếu thì `cargo run` |
 
-Ví dụ:
 ```bash
-SEG=86 STEPS=40 LR=1e-3 ./scripts/run_training.sh     # smoke 1 s
-SEG=full STEPS=40      ./scripts/run_training.sh      # cả câu (chậm)
+# VIVOS đầy đủ:
+DATA=data/vivos STEPS=1500 ./scripts/run_training.sh
 ```
 
 ### Nghe lại cả câu từ adapter đã train (không train lại)
-`Adapter` là `Linear` không phụ thuộc thời gian → dùng `render` để sinh **cả câu**:
+`Adapter` là `Linear` không phụ thuộc thời gian → dùng `generate` để sinh **cả câu**:
 ```bash
-./bin/voice-train render \
+./bin/voice generate \
   --feats sources/features/422-122949-0031.npy \
   --adapter sources/features/adapter.bpk \
   --out-wav full.wav            # 6.84 s, không đụng weight
@@ -135,22 +132,22 @@ SEG=full STEPS=40      ./scripts/run_training.sh      # cả câu (chậm)
 
 ---
 
-## 4b. Nhiều giọng — Luồng 1 (`train bridge`)
+## 4b. Nhiều giọng — Luồng 1 (`voice train`)
 
-Khác với `run_training.sh` (overfit **một** câu), Luồng 1 học cầu nối nội dung trên
+Luồng 1 học cầu nối nội dung trên
 **nhiều giọng** và chấm điểm bằng cổng PASS/FAIL (§13.6.4). Cần dataset đã chia
 thành `train.csv`/`val.csv` bằng `scripts/data/` (Python — xem
 `scripts/data/README.md`).
 
-Trên Colab, nếu `./bin/` có `embed_batch` + `voice-train` (từ `fetch_bin.sh`) thì
+Trên Colab, nếu `./bin/` có `voice` (từ `fetch_bin.sh`) thì
 không cần Rust:
 
 ```bash
 # dữ liệu đã copy lên /content/data/vivos (train.csv, val.csv, wav/, …)
-DATA=/content/data/vivos STEPS=1500 SEG=86 BATCH=8 ./scripts/run_bridge_training.sh
+DATA=/content/data/vivos STEPS=1500 SEG=86 BATCH=8 ./scripts/run_training.sh
 ```
 
-`run_bridge_training.sh` tự: sinh features (`embed_batch`) → `train bridge` →
+`run_training.sh` tự: sinh features (`voice embed`) → `voice train` →
 `eval` (thoát **mã 1** nếu FAIL). Kết quả ở `$DATA/bridge/`: `adapter_best.bpk`,
 `adapter.bpk`, `history.csv`, `report.csv`, `summary.json`.
 
@@ -164,10 +161,10 @@ giọng), `drift` (phải ≈ 0), RMS (bắt audio im lặng/nổ). Để so gi�
 
 ## 5. Dùng giọng đích của bạn
 
-`train overfit` cần **hai** thứ khớp nhau:
+`voice` cần **hai** thứ khớp nhau cho một câu:
 
 1. một file **wav mono** (khuyến nghị 16 kHz, PCM) — giọng đích,
-2. **features ContentVec** của chính wav đó (`[1,T,768]`, do `embed` sinh).
+2. **features ContentVec** của chính wav đó (`[1,T,768]`, do `voice embed` sinh).
 
 Cách làm:
 
@@ -175,25 +172,24 @@ Cách làm:
 # giả sử bạn có my_voice.wav (16 kHz mono)
 mkdir -p sources/features
 
-./bin/embed my_voice.wav sources/features/my_voice.npy      # sinh features
+./bin/voice embed --wav my_voice.wav --out sources/features/my_voice.npy
 
-WAV=my_voice.wav \
-FEATS=sources/features/my_voice.npy \
-OUT_WAV=my_out.wav \
-SEG=86 STEPS=250 LR=1e-3 \
-./scripts/run_training.sh
+# 1 dòng manifest (song song khâu dataset) rồi chạy script duy nhất
+mkdir -p data/my
+printf 'split,speaker_id,utt_id,wav_path,feats_path,duration\n' > data/my/manifest.csv
+printf 'train,my,my_voice,my_voice.wav,sources/features/my_voice.npy,0\n' >> data/my/manifest.csv
+DATA=data/my TRAIN_MANIFEST=data/my/manifest.csv VAL_MANIFEST=data/my/manifest.csv \
+STEPS=250 LR=1e-3 ./scripts/run_training.sh
 ```
 
 Ghi chú:
-- `SEG` được **tự động co lại** theo độ dài wav + features thật, nên audio ngắn
-  không gây lỗi. Muốn dùng trọn câu thì để trống `SEG` (mặc định cả câu).
+- Training hiện **nhiều câu từ manifest** (đường duy nhất); 1 dòng manifest =
+  1 câu — dùng cho smoke. Câu ngắn không gây lỗi (kích thước đoạn tự co theo
+  dữ liệu thật).
 - Nếu wav không phải 16 kHz, chương trình vẫn chạy (resample tuyến tính về
   22.05 kHz) nhưng chất lượng tốt nhất khi đầu vào là 16 kHz.
-- Training hiện **overfit một speaker trên một câu** — đây là bước chứng minh
-  adapter học được, chưa phải huấn luyện nhiều câu.
 
 ---
-
 ## 6. Kết quả
 
 | File | Nghĩa |
@@ -225,9 +221,9 @@ Colab free ~2 core. `dec` forward+backward ở Flex CPU khá nặng:
 | `✗ thiếu sources/vits_ljs_dec` | chưa chạy `./scripts/fetch_assets.sh` |
 | `curl: 404` khi `fetch_bin.sh` | sai tag. Kiểm tra `TAG=vX.Y.Z` đúng release có binary; xem mục Releases |
 | `sha256sum -c` FAIL khi fetch model | file tải lỗi mạng — chạy lại `fetch_assets.sh` |
-| `không thấy bin/embed — dùng cargo run` | chưa chạy `fetch_bin.sh`; nếu máy có Rust thì script tự build |
+| `không thấy bin/voice — dùng cargo run` | chưa chạy `fetch_bin.sh`; nếu máy có Rust thì script tự build |
 | Lỗi `Exec format error` | binary là Linux x86_64 — phải chạy trên Colab/Linux, không chạy trên macOS |
-| Hết RAM | `embed` cầm ~360 MB trọng số; giảm `SEG`, đóng runtime khác |
+| Hết RAM | `voice embed` cầm ~360 MB trọng số; giảm `BATCH`, đóng runtime khác |
 | `loss KHÔNG giảm` | tăng `STEPS`, kiểm tra wav/features đúng cặp, thử `LR` khác |
 
 ---

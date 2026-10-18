@@ -124,10 +124,20 @@ impl HubertEmbedder {
         Self::with_config_path(Path::new("sources/contentvec"))
     }
 
+    /// Create with the given Burn device (máy dev không cần CUDA vẫn chạy `cpu`).
+    pub fn new_with_device(device: Device) -> Result<Self, HubError> {
+        Self::with_config_path_and_device(Path::new("sources/contentvec"), device)
+    }
+
     /// Create with custom config directory (kept for API compatibility, currently unused).
     pub fn with_config_path(_config_dir: &Path) -> Result<Self, HubError> {
-        let device = Device::default();
+        Self::with_config_path_and_device(Path::new("sources/contentvec"), Device::default())
+    }
+}
 
+/// Thân dùng chung cho 2 constructor trên.
+impl HubertEmbedder {
+    fn with_config_path_and_device(_config_dir: &Path, device: Device) -> Result<HubertEmbedder, HubError> {
         // With `VOICE_EMBED_WEIGHTS=1` the weights are baked into the binary (see
         // build.rs) so a distributed binary needs no `.bpk` file at runtime.
         #[cfg(embed_weights)]
@@ -161,7 +171,9 @@ impl HubertEmbedder {
 
         Ok(Self { model, device })
     }
+}
 
+impl HubertEmbedder {
     /// Forward pass: waveform -> embeddings.
     ///
     /// Args:

@@ -19,7 +19,7 @@ Tài liệu kiến trúc đầy đủ (nguồn sự thật duy nhất): **[`docs
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ mean diff `1.78 Hz` |
 | `voice-models` | VITS HiFi-GAN generator (`dec`), viết tay | ✅ `1.26e-08` vs PyTorch |
 | `voice-lib` | Thư viện dùng chung: `cc` (dấu câu, frame, `.srt`) + `vc` (`Adapter`, resample) | 🟡 43 unit test |
-| `voice-train` | Huấn luyện/validate adapter (log-mel khả vi bằng Burn) | 🟡 loss giảm `2.22×`/40 bước |
+| `voice-train` | Một lệnh `voice`: embed/train/validate/generate/diag (log-mel khả vi bằng Burn) | 🟡 loss giảm `2.22×`/40 bước |
 
 ## Cấu trúc
 
@@ -30,7 +30,7 @@ crates/
 ├── voice-f0/       RMVPE f0 @ 100 Hz (ONNX)
 ├── voice-models/   VITS HiFi-GAN `dec` viết tay bằng Burn
 ├── voice-lib/      thư viện dùng chung (cho bên ngoài)
-└── voice-train/    huấn luyện + kiểm định (không kéo vào voice-lib)
+└── voice-train/    bin `voice` — embed/train/validate/generate/diag (không kéo vào voice-lib)
 docs/architecture.md   nguồn sự thật
 notebooks/colab_train.ipynb   huấn luyện adapter trên Colab (CPU)
 samples/               audio test nhỏ, commit được
@@ -52,15 +52,16 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 
 ### GPU (tùy chọn — release đã có sẵn)
 
-Từ **v2.2.12**, mọi binary `voice-train` trên GitHub Release đã build kèm
-feature `cuda` (mặc định). Một binary duy nhất, hai cách dùng:
+Từ **v2.2.12**, binary trên GitHub Release đã build kèm feature `cuda` (mặc định).
+Một binary `voice` duy nhất, hai cách dùng:
 
 ```bash
 # CPU (mặc định — chạy trên mọi máy, incl. Colab)
-./voice-train train overfit --device cpu ...
+./voice embed --manifest train.csv --device cpu
+./voice train --device cpu ...
 
 # CUDA (chỉ máy có GPU NVIDIA + driver/CUDA runtime)
-./voice-train train overfit --device cuda ...
+./voice train --device cuda ...
 ```
 
 > `cudarc` dùng `fallback-dynamic-loading`: không link cứng `libcudart` lúc
@@ -103,8 +104,7 @@ lên GitHub Release khi push một tag phiên bản.
 
 | Binary | Crate | Việc |
 |---|---|---|
-| `embed` | `voice-hubert` | wav → features `[1,T,768]` (trọng số ContentVec **nhúng trong binary**) |
-| `voice-train` | `voice-train` | công cụ thống nhất: `train overfit`, `train bridge`, `render`, `eval` |
+| `voice` | `voice-train` | **một lệnh**: `embed` (wav → features `[1,T,768]`, trọng số ContentVec nhúng trong binary), `train`, `validate`, `generate`, `diag` |
 | `verify_dec` | `voice-models` | validate `dec` (Rust) vs PyTorch |
 
 Các binary này **thuần Rust, tĩnh** — kiểm bằng báo cáo linkage của cargo-dist
