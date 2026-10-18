@@ -36,6 +36,8 @@ pub struct Utterance {
     pub feats: Vec<f32>,
     /// Wav đích đã resample 22.05 kHz.
     pub wav: Vec<f32>,
+    /// f0 RMVPE @100 Hz, co-location cạnh feats (`.f0.npy`). `None` nếu chưa có.
+    pub f0: Option<Vec<f32>>,
 }
 
 /// Dataset đã nạp, kèm chỉ mục theo giọng.
@@ -81,6 +83,24 @@ impl Dataset {
             let (wav, sr) = crate::data::read_wav_mono(Path::new(&e.wav_path))?;
             let wav = voice_lib::vc::resample_linear(&wav, sr, 22050);
 
+            // f0 co-location: feats_path ".npy" → ".f0.npy" (CSV hợp đồng không đổi)
+            let f0_path = Path::new(&e.feats_path).with_extension("f0.npy");
+            let f0 = if f0_path.exists() {
+                let (shape, flat) = voice_models::npy::read_f32(&f0_path)?;
+                let _t_f0 = match shape.as_slice() {
+                    [1, t] => *t,
+                    other => {
+                        return Err(format!(
+                            "f0 {f0_path:?} phải là [1,T], được {other:?}"
+                        )
+                        .into())
+                    }
+                };
+                Some(flat)
+            } else {
+                None
+            };
+
             utts.push(Utterance {
                 speaker: spk,
                 utt_id: e.utt_id.clone(),
@@ -88,6 +108,7 @@ impl Dataset {
                 c,
                 feats: flat,
                 wav,
+                f0,
             });
         }
 
@@ -247,6 +268,7 @@ mod tests {
                 7.0, 8.0, // frame 3
             ],
             wav: vec![0.0; SAMPLES_PER_FRAME * 10],
+            f0: None,
         }
     }
 

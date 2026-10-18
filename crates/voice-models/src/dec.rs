@@ -30,6 +30,7 @@ use burn::nn::PaddingConfig1d;
 use burn::tensor::{activation, Device, Float, Tensor, TensorData};
 
 use crate::npy;
+use crate::sinegen::SineGen;
 
 pub type Backend = Flex;
 
@@ -83,6 +84,9 @@ pub struct Generator {
     pub ups: Vec<ConvTranspose1d>,
     pub resblocks: Vec<ResBlock>,
     pub conv_post: Conv1d,
+    /// NSF excitation: `Option<Conv1d(8→512, k=1)>` — `None` khi bundle không có
+    /// `conv_src.npy` (backward-compat với checkpoint v2.2.14 trở về trước).
+    pub conv_src: Option<Conv1d>,
     pub n_kernels: usize,
     pub lrelu_slope: f64,
     /// ⚠️ Bẫy số 1: PyTorch gọi `leaky_relu(x)` không truyền slope ở bước cuối
@@ -200,11 +204,27 @@ impl Generator {
             device,
         )?;
 
+        // ---- conv_src: Conv1d(8 -> 512, k=1, bias=true) — Optional NSF
+        // excitation source. Thiếu file → None (backward-compat).
+        let conv_src_path = p("conv_src.weight".into());
+        let conv_src = if conv_src_path.exists() {
+            let cfg = Conv1dConfig::new(SineGen::out_channels(), up_init, 1)
+                .with_padding(PaddingConfig1d::Explicit(0, 0))
+                .with_bias(true)
+                .init(device);
+            let w = load3(&conv_src_path, device)?;
+            let b = load(&p("conv_src.bias".into()), device)?;
+            Some(assign_conv1d(cfg, w, b)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             conv_pre,
             ups,
             resblocks,
             conv_post,
+            conv_src,
             n_kernels,
             lrelu_slope: slope,
             lrelu_slope_final: slope_final,
@@ -213,27 +233,43 @@ impl Generator {
 
     /// `z [B, 192, T]` → `wav [B, 1, T*256]`.
     ///
-    /// Chưa có speaker conditioning — sẽ thêm `cond` sau (xem §2.4).
+    /// Đường inference cũ (không f0), tương đương `forward_full(z, None)`.
     pub fn forward(&self, z: Tensor<3, Float>) -> Tensor<3, Float> {
-        self.forward_impl(z, false).0
+        self.forward_impl(z, None, false).0
+    }
+
+    /// `z [B, 192, T]` + f0 `[B, T]` → `wav [B, 1, T*256]` với NSF excitation
+    /// bơm sau `conv_pre`. `f0 = None` tương đương `forward()`.
+    pub fn forward_full(&self, z: Tensor<3, Float>, f0: Option<Tensor<2>>) -> Tensor<3, Float> {
+        self.forward_impl(z, f0, false).0
     }
 
     /// Giống [`forward`](Self::forward) nhưng trả thêm **đầu vào của `conv_post`**
     /// (tức `x` ngay trước bước LeakyReLU cuối).
     ///
-    /// Chỉ dùng cho verify / giải chứng gradient (GĐ2). `forward()` là đường
-    /// inference thật và không giữ thêm tensor nào.
+    /// Chỉ dùng cho verify / giải chứng gradient (GĐ2). Không dùng f0.
     pub fn forward_trace(&self, z: Tensor<3, Float>) -> (Tensor<3, Float>, Tensor<3, Float>) {
-        let (wav, x) = self.forward_impl(z, true);
+        let (wav, x) = self.forward_impl(z, None, true);
         (wav, x.expect("trace = true thi phai co dau vao cua conv_post"))
     }
 
     fn forward_impl(
         &self,
         z: Tensor<3, Float>,
+        f0: Option<Tensor<2>>,
         trace: bool,
     ) -> (Tensor<3, Float>, Option<Tensor<3, Float>>) {
+        let device = z.device();
         let mut x = self.conv_pre.forward(z);
+
+        // ---- NSF-lite: bơm excitation từ f0 vào sau conv_pre (§13.4)
+        // x: [B, 512, T_z]; exc: [B, 8, T_z]; conv_src: Conv1d(8→512,k=1)
+        if let Some(f0) = f0 {
+            if let Some(src) = &self.conv_src {
+                let exc = SineGen::forward(f0, &device);
+                x = x + src.forward(exc);
+            }
+        }
 
         for (i, up) in self.ups.iter().enumerate() {
             x = activation::leaky_relu(x, self.lrelu_slope);
@@ -372,4 +408,60 @@ fn assign_conv_t(
     m.weight = burn::module::Param::from_tensor(w);
     m.bias = Some(burn::module::Param::from_tensor(b));
     Ok(m)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn::tensor::Device;
+    use std::path::Path;
+
+    fn dec_assets_exist() -> bool {
+        Path::new("sources/vits_ljs_dec/config.json").exists()
+    }
+
+    #[test]
+    fn forward_full_matches_forward_without_f0() {
+        if !dec_assets_exist() {
+            eprintln!("skip: sources/vits_ljs_dec thiếu");
+            return;
+        }
+        let device = Device::flex();
+        let gen = Generator::load(Path::new("sources/vits_ljs_dec"), &device)
+            .unwrap()
+            .freeze();
+        let make_z = || {
+            Tensor::<3>::from_data(
+                TensorData::new(vec![0.5f32; 1 * 192 * 4], [1, 192, 4]),
+                &device,
+            )
+        };
+        let w1 = gen.forward(make_z());
+        let w2 = gen.forward_full(make_z(), None);
+        let d1: Vec<f32> = w1.into_data().as_slice::<f32>().unwrap().to_vec();
+        let d2: Vec<f32> = w2.into_data().as_slice::<f32>().unwrap().to_vec();
+        assert_eq!(d1, d2, "forward_full(z, None) phải giống forward(z)");
+    }
+
+    #[test]
+    fn forward_full_with_f0_runs_and_finite() {
+        if !dec_assets_exist() {
+            eprintln!("skip: sources/vits_ljs_dec thiếu");
+            return;
+        }
+        let device = Device::flex();
+        let gen = Generator::load(Path::new("sources/vits_ljs_dec"), &device)
+            .unwrap()
+            .freeze();
+        let z = Tensor::<3>::from_data(
+            TensorData::new(vec![0.5f32; 1 * 192 * 4], [1, 192, 4]),
+            &device,
+        );
+        let f0 = Tensor::<2>::from_data(TensorData::new(vec![220.0f32; 4], [1, 4]), &device);
+        let wav = gen.forward_full(z, Some(f0));
+        let d: Vec<f32> = wav.into_data().as_slice::<f32>().unwrap().to_vec();
+        assert_eq!(d.len(), 4 * 256);
+        assert!(d.iter().all(|v| v.is_finite()), "wav phải finite");
+    }
 }

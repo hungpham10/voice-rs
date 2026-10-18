@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use burn::module::Module;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::{Device, Tensor, TensorData};
-use voice_lib::vc::Adapter;
+use voice_lib::vc::{Adapter, nearest_index_map};
 use voice_mel::MelConfig;
 use voice_models::dec::Generator;
 
@@ -39,6 +39,9 @@ pub struct TrainConfig {
     pub seed: u64,
     /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` trong `out_dir`.
     pub checkpoint_every: usize,
+    /// Bật NSF-lite: unfreeze `conv_src` và bơm excitation từ f0 sau `conv_pre`.
+    /// Yêu cầu bundle dec có `conv_src.npy` và mỗi câu có `.f0.npy` co-location.
+    pub nsf: bool,
 }
 
 /// Kết quả huấn luyện.
@@ -129,7 +132,38 @@ pub fn run_training(
         .collect();
 
     let device = device.clone().autodiff();
-    let gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
+    let mut gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
+
+    // NSF-lite: unfreeze conv_src (chỉ có khi bundle có conv_src.npy).
+    if cfg.nsf {
+        let src = gen
+            .conv_src
+            .take()
+            .ok_or_else(|| {
+                format!(
+                    "voice train --nsf yêu cầu bundle dec có conv_src.npy (thiếu ở {})",
+                    cfg.dec_dir.display()
+                )
+            })?;
+        let src = src.unfreeze();
+        gen.conv_src = Some(src);
+    }
+
+    // Khi bật NSF, mọi câu phải kèm .f0.npy co-location.
+    if cfg.nsf {
+        for ds in [train_ds, val_ds] {
+            for utt in &ds.utts {
+                if utt.f0.is_none() {
+                    return Err(format!(
+                        "voice train --nsf: câu {} thiếu features .f0.npy co-location",
+                        utt.utt_id
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+
     let mut adapter = Adapter::new(&device).unfreeze();
     let params = adapter.in_dim() * adapter.out_dim() + adapter.out_dim();
 
@@ -177,8 +211,9 @@ pub fn run_training(
     for step in 0..cfg.steps {
         let mut feats_host: Vec<f32> = Vec::with_capacity(cfg.batch * c * t_h_seg);
         let mut wav_host: Vec<f32> = Vec::with_capacity(cfg.batch * n);
+        let mut f0_host: Vec<f32> = vec![0.0f32; cfg.batch * seg];
 
-        for _ in 0..cfg.batch {
+        for i in 0..cfg.batch {
             // Round-robin theo giọng → batch cân bằng bất kể số câu mỗi giọng.
             let spk = active[cursor % active.len()];
             cursor = (cursor + 1) % active.len();
@@ -196,14 +231,31 @@ pub fn run_training(
             feats_host.extend_from_slice(&train_ds.segment_feats_channel_major(u, h0, t_h_seg));
             let (wav_seg, _) = train_ds.segment_wav(u, l0, seg);
             wav_host.extend_from_slice(&wav_seg);
+
+            // f0 của câu này, resample từ 100 Hz (RMVPE) về seg frame latent (86.13 Hz)
+            if cfg.nsf {
+                let f0 = train_ds.utts[u].f0.as_ref().expect("f0 đã kiểm ở trên");
+                let map = nearest_index_map(f0.len(), seg);
+                for t in 0..seg {
+                    f0_host[i * seg + t] = f0[map[t]];
+                }
+            }
         }
 
         let b = cfg.batch;
         let feats = Tensor::<3>::from_data(TensorData::new(feats_host, [b, c, t_h_seg]), &device);
         let target = Tensor::<2>::from_data(TensorData::new(wav_host, [b, n]), &device);
+        let f0_tensor = if cfg.nsf {
+            Some(Tensor::<2>::from_data(
+                TensorData::new(f0_host, [b, seg]),
+                &device,
+            ))
+        } else {
+            None
+        };
 
         let z = adapter.forward_to(feats, seg);
-        let wav = gen.forward(z).reshape([b, n]);
+        let wav = gen.forward_full(z, f0_tensor).reshape([b, n]);
         let loss = mel::mel_l1(wav, target, &mel_cfg, &basis);
 
         let lv: f64 = loss.clone().into_scalar::<f32>() as f64;
@@ -302,6 +354,7 @@ mod tests {
             c: 768,
             feats: vec![0.0f32; t_h * 768],
             wav: vec![0.1f32; t_h * 256],
+            f0: None,
         }
     }
 
@@ -343,6 +396,7 @@ mod tests {
             val_every: 5,
             seed: 42,
             checkpoint_every: 0,
+            nsf: false,
         };
         let summary = run_training(&train_ds, &val_ds, &cfg, &device).expect("train không panic");
         assert!(summary.first.is_finite());

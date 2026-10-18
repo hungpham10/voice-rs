@@ -28,10 +28,13 @@ pub struct Rmvpe {
 }
 
 impl Rmvpe {
-    /// Create new pitch extractor with default model.
+    /// Create new pitch extractor with default model (device = `Device::default()`).
     pub fn new() -> Result<Self, F0Error> {
-        let device = Device::default();
+        Self::new_with_device(Device::default())
+    }
 
+    /// Create new pitch extractor on the given device (`cpu`/`cuda`).
+    pub fn new_with_device(device: Device) -> Result<Self, F0Error> {
         // Build script writes .bpk into OUT_DIR (same directory as generated model code)
         // The ONNX file is rmvpe_f0.onnx, so the model is named rmvpe_f0
         let bpk = Path::new(env!("OUT_DIR")).join("model/rmvpe_f0.bpk");
