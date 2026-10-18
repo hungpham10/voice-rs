@@ -66,7 +66,7 @@ fi
 
 echo "Bump: $CURRENT_VERSION → $NEW_VERSION (branch: $BRANCH)"
 
-NEW_VERSION_PERL="$NEW_VERSION" perl -pi -e "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$ENV{NEW_VERSION_PERL}\"/" "$CARGO_TOML"
+NEW_VERSION_PERL="$NEW_VERSION" perl -pi -e 's/^version = "[0-9]+.[0-9]+.[0-9]+"/version = "$ENV{NEW_VERSION_PERL}"/' "$CARGO_TOML"
 
 cargo update --workspace --quiet
 
