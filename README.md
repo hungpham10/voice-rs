@@ -50,6 +50,23 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 > Trên Colab (không có Rust) dùng `./scripts/setup.sh` — tự tải thêm binary Linux
 > vào `./bin/`. Xem [`docs/colab-guide.md`](docs/colab-guide.md).
 
+### GPU (tùy chọn — build riêng)
+
+Mặc định chỉ build CPU (`flex`). Muốn dùng GPU:
+
+```bash
+# NVIDIA GPU (Linux) — cần CUDA toolkit
+cargo build --release -p voice-train --features cuda
+./target/release/voice-train train overfit --device cuda ...
+
+# macOS (Metal)
+cargo build --release -p voice-train --features metal
+./target/release/voice-train train overfit --device metal ...
+```
+
+> Binary GPU **không** tải qua `fetch_bin.sh` / `cargo-dist` (chỉ CPU Linux x86_64).
+> Chỉ dùng trên máy có GPU + toolkit tương ứng.
+
 ## Model (không nằm trong git)
 
 `sources/` bị `.gitignore`. Cách gọn nhất: `./scripts/fetch_assets.sh` tải bundle

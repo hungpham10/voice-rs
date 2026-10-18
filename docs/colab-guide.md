@@ -40,13 +40,23 @@ GitHub Release  v2.2.11  (cargo-dist)  ──►  voice-{hubert,train,models}-..
 repo  samples/422-122949-0031.wav     ←   wav mẫu (nằm trong git)
 ```
 
-Ba binary:
+Ba binary (CPU-only — build cho Colab):
 
 | Binary | Việc |
 |---|---|
 | `embed` | wav giọng đích → features ContentVec `[1,T,768]` (trọng số nhúng sẵn trong binary) |
 | `verify_dec` | validate `dec` (Rust) khớp PyTorch (bước kiểm tra trước khi train) |
 | `voice-train` | công cụ huấn luyện thống nhất: `train overfit` (1 câu), `train bridge` (nhiều giọng), `eval` |
+
+> **GPU (tùy chọn — không ship qua Release):**
+> Binary trên Release chỉ **CPU Linux x86_64** (dành cho Colab). Muốn GPU:
+> ```bash
+> # NVIDIA GPU (Linux) — cần CUDA toolkit
+> cargo build --release -p voice-train --features cuda
+> # macOS (Metal)
+> cargo build --release -p voice-train --features metal
+> ```
+> Binary GPU phụ thuộc thư viện hệ thống (`libcudart` / Metal) — không phù hợp cargo-dist Colab.
 
 ---
 
