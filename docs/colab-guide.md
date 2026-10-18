@@ -53,10 +53,8 @@ Ba binary (CPU-only — build cho Colab):
 > ```bash
 > # NVIDIA GPU (Linux) — cần CUDA toolkit
 > cargo build --release -p voice-train --features cuda
-> # macOS (Metal)
-> cargo build --release -p voice-train --features metal
 > ```
-> Binary GPU phụ thuộc thư viện hệ thống (`libcudart` / Metal) — không phù hợp cargo-dist Colab.
+> Binary GPU phụ thuộc thư viện hệ thống (`libcudart`) — không phù hợp cargo-dist Colab.
 
 ---
 

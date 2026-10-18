@@ -1424,12 +1424,12 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
   kéo thêm crate mạng (đây là tiện ích công cụ, không thuộc runtime suy luận);
   repo đích phải **đã tồn tại**.
 
-##### b) Chọn backend — `--device cpu|cuda|metal`
+##### b) Chọn backend — `--device cpu|cuda`
 
 - Burn 0.22: `Backend` **không** là type param của `Tensor` (§11) — device chọn lúc
-  runtime (`Device::default()` vs `.autodiff()`). Nhưng **backend** (CPU/CUDA/Metal)
+  runtime (`Device::default()` vs `.autodiff()`). Nhưng **backend** (CPU/CUDA)
   lại chọn lúc **compile** qua feature của crate `burn`. Nên `--device` là *ánh xạ
-  compile-time*: build có feature tương ứng mới chạy được; thiếu thì **báo lỗi rõ**,
+  runtime*: build có feature tương ứng mới chạy được; thiếu thì **báo lỗi rõ**,
   không panic mơ hồ.
 - Mặc định **`cpu`** (feature `default`) — khớp Colab, và `cargo-dist` hiện chỉ ship
   `x86_64-unknown-linux-gnu` CPU (§16.2.2).
@@ -1439,12 +1439,11 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
   ```
   Binary này phụ thuộc `libcudart` — **không** ship qua cargo-dist Colab (đã chỉ định
   `x86_64-unknown-linux-gnu` CPU). Dành cho máy dev/Linux server có GPU.
-- **Metal (`--device metal`)**: macOS dev build:
-  ```bash
-  cargo build --release -p voice-train --features metal  # macOS
-  ```
 - Sanity: chạy 5 bước trên hai backend phải cho loss tương đương (khi có GPU để đối
   chiếu) — đây là một *gate* (mục g), không phải suy đoán.
+
+> `metal` (macOS) đã được loại khỏi stack — chỉ giữ `cpu` + `cuda` theo quyết định
+> từng nền tảng (Linux = flex+cuda, macOS nếu muốn thì branch riêng sau).
 
 ##### c) Data bằng Python — `scripts/data/` (công cụ dev)
 
