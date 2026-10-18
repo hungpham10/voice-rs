@@ -5,11 +5,11 @@
 #   ./scripts/fetch_bin.sh              # tag mặc định (xem TAG bên dưới)
 #   TAG=v0.1.0 ./scripts/fetch_bin.sh   # chọn tag khác
 #
-# Giải nén vào ./bin/{voice,verify_dec}.
+# Giải nén vào ./bin/{voice}.
 set -euo pipefail
 
 REPO="${REPO:-hungpham10/voice-rs}"
-TAG="${TAG:-v2.2.13}"
+TAG="${TAG:-v2.2.14}"
 TARGET="x86_64-unknown-linux-gnu"
 
 mkdir -p bin
@@ -33,7 +33,6 @@ fetch_bin() { # <package> <binary-name>
 }
 
 fetch_bin voice-train voice
-fetch_bin voice-models verify_dec
 
 echo "✔ binary sẵn sàng trong ./bin/"
 ls -lh bin/

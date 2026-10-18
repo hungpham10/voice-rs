@@ -6,6 +6,7 @@
 //! voice validate --val-manifest ... --adapter ... [--gate gate.toml]
 //! voice generate --feats ... --adapter ... [--out-wav render.wav]
 //! voice diag     --target ... --gen ... [--f0 f0.npy]
+//! voice verify   --dec-dir sources/vits_ljs_dec [--device cpu|cuda]
 //! ```
 //!
 //! - `embed` = sinh features ContentVec (HuBERT) — model nạp **một lần** rồi lặp
@@ -21,10 +22,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use burn::tensor::{Tensor, TensorData};
 use clap::{Args, Parser, Subcommand};
 use voice_lib::vc::Adapter;
 use voice_mel::MelConfig;
 use voice_models::dec::Generator;
+use voice_models::npz::read_npz;
 use voice_train::dataset::Dataset;
 use voice_train::hub::HubConfig;
 use voice_train::train::TrainConfig;
@@ -53,6 +56,8 @@ enum Cmd {
     Generate(GenerateArgs),
     /// Chẩn đoán rè/nhiễu: mel-L1 theo band + voiced/unvoiced (PR-B1)
     Diag(DiagArgs),
+    /// Verify `dec` (Rust) vs PyTorch ground truth npz — bước kiểm tra trước khi train
+    Verify(VerifyArgs),
 }
 
 /// Tham số `embed` — HuBERT/ContentVec → features `.npy`.
@@ -227,6 +232,17 @@ struct DiagArgs {
     out_csv: Option<PathBuf>,
 }
 
+/// Tham số `verify` — đối chiếu `dec` (Burn) với ground truth PyTorch npz.
+#[derive(Args)]
+struct VerifyArgs {
+    /// Thư mục dec chứa config.json + dec/*.npy + ref_audio.npz + ref_input.npz.
+    #[arg(long, default_value = "sources/vits_ljs_dec")]
+    dec_dir: PathBuf,
+    /// `cpu` | `cuda`.
+    #[arg(long, default_value = "cpu")]
+    device: String,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
@@ -235,6 +251,7 @@ fn main() -> ExitCode {
         Cmd::Validate(a) => run_validate(a),
         Cmd::Generate(a) => run_generate(a),
         Cmd::Diag(a) => run_diag(a),
+        Cmd::Verify(a) => run_verify(a),
     };
     match result {
         Ok(code) => code,
@@ -615,6 +632,99 @@ fn run_diag(a: DiagArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("\n🔑 mọi band + unvoiced đều lệch — nghi Z NGOÀI MANIFOLD (bridge) — NSF không phải nút thắt chính");
         }
         _ => {} // không đủ dữ liệu để quyết — đọc bảng manual
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_verify(a: VerifyArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let dir = PathBuf::from(&a.dec_dir);
+    let audio_npz = dir.join("ref_audio.npz");
+    let input_npz = dir.join("ref_input.npz");
+    if !audio_npz.exists() {
+        return Err(format!("{audio_npz:?} chưa có — chạy ./scripts/fetch_assets.sh").into());
+    }
+
+    let device = device::select(&a.device)?;
+    println!("Nạp generator từ {} ...", dir.display());
+    let gen = Generator::load(&dir, &device)?;
+    println!("  OK\n");
+
+    let ref_a = read_npz(&audio_npz)?;
+    let ref_z = read_npz(&input_npz)?;
+
+    let mut keys: Vec<&String> = ref_a.keys().collect();
+    keys.sort_by_key(|k| k.trim_start_matches('T').parse::<usize>().unwrap_or(0));
+
+    let mut all_pass = true;
+    let mut worst_overall = 0.0f64;
+
+    println!(
+        "{:>5}  {:>10}  {:>10}  {:>12}  {:>11}  {}",
+        "T", "samples", "mong doi", "max abs diff", "rms", "ket qua"
+    );
+
+    for k in &keys {
+        let t: usize = k.trim_start_matches('T').parse()?;
+        let expect_n = t * 256;
+        let (z_flat, _z_dims) = ref_z.get(*k).expect("thieu z");
+        let (ref_flat, _) = ref_a.get(*k).expect("thieu audio");
+
+        let z = Tensor::from_data(TensorData::new(z_flat.clone(), [1usize, 192, t]), &device);
+        let out = gen.forward(z);
+        let [b, c, n] = out.dims();
+
+        if b != 1 || c != 1 {
+            println!("T={t:<5} shape {b}x{c}x{n} — SAI shape, bo qua");
+            all_pass = false;
+            continue;
+        }
+        if n != expect_n {
+            println!(
+                "T={t:<5} {n:>10}  {expect_n:>10}  {:>12}  {:>11}  FAIL chieu dai",
+                "-", "-"
+            );
+            all_pass = false;
+            continue;
+        }
+
+        let got = out.into_data().as_slice::<f32>()?.to_vec();
+
+        let mut max_abs = 0.0f64;
+        let mut sq = 0.0f64;
+        let mut sq_ref = 0.0f64;
+        for (a, b) in got.iter().zip(ref_flat.iter()) {
+            let d = (*a as f64 - *b as f64).abs();
+            if d > max_abs {
+                max_abs = d;
+            }
+            sq += (*a as f64).powi(2);
+            sq_ref += (*b as f64).powi(2);
+        }
+        let rms_got = (sq / got.len() as f64).sqrt();
+        let rms_ref = (sq_ref / ref_flat.len() as f64).sqrt();
+        worst_overall = worst_overall.max(max_abs);
+
+        let ok = max_abs < 1e-4 && (rms_got - rms_ref).abs() < 1e-5;
+        all_pass &= ok;
+        println!(
+            "{t:>5}  {n:>10}  {expect_n:>10}  {max_abs:>12.3e}  {rms_got:>11.6}  {}",
+            if ok { "PASS" } else { "FAIL" }
+        );
+    }
+
+    println!("\nmax abs diff lớn nhất: {worst_overall:.3e}");
+    {
+        let (data, _) = ref_a.values().next().expect("khong co mau nao");
+        let sq: f64 = data.iter().map(|v| (*v as f64).powi(2)).sum();
+        println!(
+            "rms chuỗi đầu (PyTorch): {:.6}   n = {}",
+            (sq / data.len() as f64).sqrt(),
+            data.len()
+        );
+    }
+    println!("\n{}", if all_pass { "PASS tat ca" } else { "CO FAIL" });
+    if !all_pass {
+        std::process::exit(1);
     }
     Ok(ExitCode::SUCCESS)
 }

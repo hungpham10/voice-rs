@@ -35,7 +35,7 @@ GitHub Release  assets-v1            ──►  voice-assets.tar.gz
    • sources/vits_ljs_dec/            (155 .npy + config + ref_*.npz)
 
 GitHub Release  v2.2.11  (cargo-dist)  ──►  voice-{hubert,train,models}-....tar.xz
-   • voice  ·  verify_dec   (Linux x86_64)
+   • voice   (Linux x86_64)
 
 repo  samples/422-122949-0031.wav     ←   wav mẫu (nằm trong git)
 ```
@@ -44,8 +44,7 @@ Hai binary (build cho Colab):
 
 | Binary | Việc |
 |---|---|
-| `voice` | một lệnh thống nhất: `embed` / `train` / `validate` / `generate` / `diag` — trọng số ContentVec nhúng sẵn trong binary |
-| `verify_dec` | validate `dec` (Rust) khớp PyTorch (bước kiểm tra trước khi train) |
+| `voice` | một lệnh thống nhất: `embed` / `train` / `validate` / `generate` / `diag` / `verify` — trọng số ContentVec nhúng sẵn trong binary |
 
 > **GPU (tùy chọn — release đã có sẵn):**
 > Binary `voice` trên Release đã build kèm feature `cuda`.
