@@ -7894,6 +7894,7 @@ dependencies = [
  "burn",
  "burn-onnx",
  "burn-store",
+ "clap",
  "hound",
  "npy",
  "thiserror 2.0.21",

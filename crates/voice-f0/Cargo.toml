@@ -8,6 +8,8 @@ repository = "https://github.com/hungpham10/voice-rs"
 [dependencies]
 burn = { workspace = true }
 burn-store = { workspace = true }
+clap = { workspace = true }
+hound = { workspace = true }
 thiserror = { workspace = true }
 voice-mel = { path = "../voice-mel" }
 

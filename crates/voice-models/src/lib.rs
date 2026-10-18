@@ -11,3 +11,4 @@
 pub mod dec;
 pub mod npy;
 pub mod npz;
+pub mod sinegen;

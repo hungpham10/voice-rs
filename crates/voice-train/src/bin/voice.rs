@@ -170,6 +170,9 @@ struct TrainArgs {
     /// `cpu` | `cuda` (mặc định `cpu` cho dev; release binary ưu tiên CUDA).
     #[arg(long, default_value = "cpu")]
     device: String,
+    /// Bật NSF-lite: unfreeze `conv_src` + bơm excitation từ f0 (yêu cầu .f0.npy).
+    #[arg(long, default_value_t = false)]
+    nsf: bool,
     #[command(flatten)]
     hub: HubArgs,
 }
@@ -405,6 +408,7 @@ fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         val_every: a.val_every,
         seed: a.seed,
         checkpoint_every: a.checkpoint_every,
+        nsf: a.nsf,
     };
     println!("== voice train (device {}) ==", a.device);
     let s = train::run_training(&train_ds, &val_ds, &cfg, &device)?;
