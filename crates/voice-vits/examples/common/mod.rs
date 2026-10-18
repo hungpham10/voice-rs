@@ -1,9 +1,9 @@
 //! Đọc `.npz` (zip chứa nhiều `.npy`) — chỉ cần `.npy` **không nén** (stored).
 //!
-//! Re-export từ [`voice_models::npz`] để duy nhất một nguồn đọc npz cho toàn bộ
+//! Re-export từ [`voice_vits::npz`] để duy nhất một nguồn đọc npz cho toàn bộ
 //! các ví dụ verify.
 
-pub use voice_models::npz::{self, read_npz, Npz};
+pub use voice_vits::npz::{self, read_npz, Npz};
 
 use std::path::Path;
 

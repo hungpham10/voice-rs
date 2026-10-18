@@ -54,7 +54,7 @@ flowchart LR
     G["🔶 MÀU ÂM — §13.12<br/>A: trong trọng số adapter<br/>B: thêm dec.cond"]
     G -.->|"cond(g)"| GEN
 
-    GEN["voice-models<br/>VITS HiFi-GAN generator<br/>✅ 1.26e-08"]
+    GEN["voice-vits<br/>VITS HiFi-GAN generator<br/>✅ 1.26e-08"]
 
     GEN --> OUT["wav 22.05 kHz<br/>[B, 1, T·256]"]
 
@@ -93,7 +93,7 @@ flowchart LR
 | 4 | 🔴 Sai số làm tròn frame **tích luỹ** khi cắt nhiều đoạn → caption trôi dần | §14.5 |
 
 
-**Đã xong:** `voice-hubert`, `voice-f0`, `voice-mel`, `voice-models`,
+**Đã xong:** `voice-hubert`, `voice-f0`, `voice-mel`, `voice-vits`,
 GĐ1 (`derive(Module)`), GĐ2 (backward).
 **Còn thiếu:** adapter (GĐ4) — mới là thứ chặn tiến trình; GĐ3 (`apply_lora` trên
 `dec`) **đang bị chặn** vì burn chỉ LoRA cho tham số 2-D (§13.8.2); và toàn bộ phần
@@ -175,7 +175,7 @@ chiều 0** (`dims = (1, …, −1)`), không phải "trừ chiều cuối" — 
 
 ---
 
-## 2. voice-models — VITS HiFi-GAN generator
+## 2. voice-vits — VITS HiFi-GAN generator
 
 Đã xong, viết tay bằng Burn. **Không** dùng burn-onnx codegen: kiến trúc chỉ là
 conv, viết tay ~250 dòng, bỏ hẳn phụ thuộc `OUT_DIR` / `.bpk` / codegen.
@@ -360,8 +360,8 @@ trọng số adapter, đúng kiểu RVC) là hướng rẻ nhất và không c�
 
 ### 2.5 Đã verify
 
-`crates/voice-models/src/dec.rs` (~250 dòng, Burn tay) +
-`crates/voice-models/src/npy.rs` (đọc `.npy`) +
+`crates/voice-vits/src/dec.rs` (~250 dòng, Burn tay) +
+`crates/voice-vits/src/npy.rs` (đọc `.npy`) +
 `crates/voice-train/src/bin/voice.rs` (subcommand `verify`).
 
 Cấu trúc Rust hiện tại:
@@ -542,7 +542,7 @@ cửa sổ ±4 quanh argmax, `cents_mapping = 20·arange(360) + 1997.3794`, và
 | `voice-hubert` | ContentVec 768 @ 50 Hz | ✅ xong, chờ adapter |
 | `voice-mel` | log-mel (nhiều variant) | ✅ verify `4.77e-07` |
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ xong, 🔶 chờ chốt §13.4 |
-| `voice-models` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
+| `voice-vits` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
 | `voice-lib` | **Thư viện dùng chung**: `cc` (tách dấu câu, chia frame, `.srt`) + `vc` (`Adapter` Burn P1, nội suy frame rate, resample PCM) | 🟡 logic + `Adapter` xong (**43 unit test**) |
 | `voice-train` | **Một lệnh `voice`** (huấn luyện + validate + suy diễn + embed): log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`; bin `voice` gom subcommand `embed` / `train` / `validate` / `generate` / `diag` (§13.6.4), kèm checkpoint định kỳ + đẩy HuggingFace Hub | ✅ nhiều giọng + gate PASS/FAIL — §13.6.4 |
 
@@ -557,13 +557,13 @@ Phân tách từng tầng cho phép verify độc lập với PyTorch — điề
 
 | Xoá | Kích thước | Vì sao |
 |---|---|---|
-| `voice-models/src/model.rs` | **13 065 dòng** | burn-onnx codegen SpeechT5 HiFi-GAN — đường cũ |
-| `voice-models` `HiFiGan`/`VocoderError` + `build.rs` + `examples/vocoder.rs` | ~270 dòng | chỉ dùng cho đường cũ |
+| `voice-vits/src/model.rs` | **13 065 dòng** | burn-onnx codegen SpeechT5 HiFi-GAN — đường cũ |
+| `voice-vits` `HiFiGan`/`VocoderError` + `build.rs` + `examples/vocoder.rs` | ~270 dòng | chỉ dùng cho đường cũ |
 | `voice-pipe` | 92 dòng | chỉ bọc `HiFiGan`, không ai dùng |
 | `voice-index` | 247 dòng | FAISS/RVC, VITS không có retrieval |
 | `voice-cc` + `voice-vc` | 2 crate | gộp vào `voice-lib` |
 
-Tổng: gom về **6 crate**, bỏ ~13,7k dòng chết. Hệ quả phụ đắt giá: `voice-models`
+Tổng: gom về **6 crate**, bỏ ~13,7k dòng chết. Hệ quả phụ đắt giá: `voice-vits`
 **không còn cần** `sources/vocoder/generator.onnx` để build.
 
 > `MelConfig::speecht5()` + `verify_speecht5` **giữ lại** ở `voice-mel` — chúng là
@@ -664,8 +664,8 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 | `voice-hubert` | ✅ max abs diff `3e-4` |
 | `voice-mel` | ✅ max abs diff `4.77e-07` |
 | `voice-f0` | ✅ mean diff `1.78 Hz` |
-| `voice-models` (VITS `dec`, viết tay) | ✅ **max abs diff `1.26e-08`** trên 7 giá trị T |
-| ~~`voice-models` (SpeechT5 HiFi-GAN)~~ | 🗑️ **đã xoá** — đường cũ, kéo theo `model.rs` 13 065 dòng (§6) |
+| `voice-vits` (VITS `dec`, viết tay) | ✅ **max abs diff `1.26e-08`** trên 7 giá trị T |
+| ~~`voice-vits` (SpeechT5 HiFi-GAN)~~ | 🗑️ **đã xoá** — đường cũ, kéo theo `model.rs` 13 065 dòng (§6) |
 | `dec.rs` → `#[derive(Module)]` | ✅ GĐ1 — `voice verify` vẫn `1.26e-08` |
 | backward trên `Autodiff<Flex>` | ✅ GĐ2 — 6/6 gradient ≠ 0, finite; khớp tay `5.8e-09` |
 | `ParamGroup` + regex chọn block | ✅ khớp **76/76** tensor |
@@ -687,8 +687,8 @@ Tốn nhiều thời gian nhất trong 4 bẫy. `rosa` theo librosa: `center=tru
 # ===== VITS: nạp trọng số (đã đóng băng trên HF) rồi verify =====
 ./scripts/fetch_assets.sh                                # contentvec + vits_ljs_dec từ HF
 cargo run --release -p voice-train --bin voice -- verify     # forward vs PyTorch
-cargo run --release -p voice-models --example verify_backward # GĐ2: gradient
-cargo run --release -p voice-models --example verify_lora     # GĐ3: BLOCKED, xem §13.8.2
+cargo run --release -p voice-vits --example verify_backward # GĐ2: gradient
+cargo run --release -p voice-vits --example verify_lora     # GĐ3: BLOCKED, xem §13.8.2
 
 # Kiểm tra sàng lọc trước khi làm bất cứ thứ gì (công cụ dev, chỉ khi nạp ONNX mới)
 python3 scripts/screen_onnx.py <model.onnx>
@@ -787,7 +787,7 @@ Bản khác export chưa chắc đã sạch op — vẫn phải chạy `screen_o
   `burn::nn::*`.
 - burn-onnx gen tên module theo tên file ONNX: `generator.onnx` →
   `generator.rs` → `pub mod generator_model`.
-- `voice-models` cần `burn-store` ở cả `[dependencies]` lẫn `[build-dependencies]`.
+- `voice-vits` cần `burn-store` ở cả `[dependencies]` lẫn `[build-dependencies]`.
 - burn-onnx sinh sẵn `impl Default` với **đường dẫn tuyệt đối** của lần build đó →
   stale khi rebuild. Nên tự gọi `Model::from_file(&bpk, &device)`.
 - `torch.nn.utils.remove_weight_norm` **không** dùng được với module tạo bằng
@@ -1646,7 +1646,7 @@ Lora::new(rank, alpha).set_param_group(
 
 #### 13.8.2 🔴 Blocker: burn chỉ LoRA cho tham số **2-D**
 
-Đo thật bằng `crates/voice-models/examples/verify_lora.rs`:
+Đo thật bằng `crates/voice-vits/examples/verify_lora.rs`:
 
 ```
 base           num_params = 14327424  (14.33 M)
@@ -1799,7 +1799,7 @@ Ba điều cần đo trước khi tin `ConvLora` sẽ tốt bằng `Lora`:
 
 ### 13.9 Backward của generator — ✅ đã chạy thật, khớp công thức tay
 
-**Đo bằng** `crates/voice-models/examples/verify_backward.rs`.
+**Đo bằng** `crates/voice-vits/examples/verify_backward.rs`.
 
 #### 13.9.1 Không tốn một dòng sửa nào trong `dec.rs`
 
@@ -2447,7 +2447,7 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 
 | Workflow | Kích hoạt | Việc |
 |---|---|---|
-| `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
+| `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-vits`, `voice-train`). Không tải asset. |
 | `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` (HF) + verify sha256 → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. **Không Python/torch** — trọng số `vits_ljs_dec/*.npy` đã đóng băng trên HF. |
 | `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`voice`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
 

@@ -14,7 +14,7 @@ use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::{Device, Tensor, TensorData};
 use voice_lib::vc::{Adapter, nearest_index_map};
 use voice_mel::MelConfig;
-use voice_models::dec::Generator;
+use voice_vits::dec::Generator;
 
 use crate::dataset::{Dataset, Rng, HUBERT_HZ, LATENT_HZ, SAMPLES_PER_FRAME};
 use crate::{eval, mel};
@@ -345,7 +345,7 @@ mod tests {
     use crate::mel;
     use voice_lib::vc::Adapter;
     use voice_mel::MelConfig;
-    use voice_models::dec::Generator;
+    use voice_vits::dec::Generator;
     use std::path::{Path, PathBuf};
 
     fn make_utt(speaker: usize, utt_id: &str, t_h: usize) -> Utterance {

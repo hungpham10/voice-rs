@@ -45,7 +45,7 @@ pub fn features_channel_major(
     path: &Path,
     device: &Device,
 ) -> Result<Tensor<3>, Box<dyn std::error::Error>> {
-    let (shape, flat) = voice_models::npy::read_f32(path)?;
+    let (shape, flat) = voice_vits::npy::read_f32(path)?;
     if shape.len() != 3 || shape[0] != 1 {
         return Err(format!("features phải là [1, T, C], được {shape:?}").into());
     }
