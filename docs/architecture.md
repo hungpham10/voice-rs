@@ -1431,19 +1431,29 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
   lại chọn lúc **compile** qua feature của crate `burn`. Nên `--device` là *ánh xạ
   runtime*: build có feature tương ứng mới chạy được; thiếu thì **báo lỗi rõ**,
   không panic mơ hồ.
-- Mặc định **`cpu`** (feature `default`) — khớp Colab, và `cargo-dist` hiện chỉ ship
-  `x86_64-unknown-linux-gnu` CPU (§16.2.2).
-- **GPU (`--device cuda`)**: build với `--features cuda` + CUDA toolkit:
-  ```bash
-  cargo build --release -p voice-train --features cuda  # cần GPU NVIDIA + CUDA toolkit
+- Mặc định **`cpu`** cho tham số `--device` (mọi subcommand train/render/eval
+  đều `default_value = "cpu"`), và feature `cuda` đã vào **default** của crate
+  `voice-train`:
+  ```toml
+  [features]
+  default = ["cuda"]
+  cuda = ["burn/cuda"]
   ```
-  Binary này phụ thuộc `libcudart` — **không** ship qua cargo-dist Colab (đã chỉ định
-  `x86_64-unknown-linux-gnu` CPU). Dành cho máy dev/Linux server có GPU.
+  → Mọi bản release từ cargo-dist là **"full"**: binary Linux x86_64 duy nhất
+  chạy được `--device cpu` trên mọi máy (Colab, CI), và `--device cuda` trên máy
+  có GPU NVIDIA. Không cần build riêng.
+- `cudarc` dùng `fallback-dynamic-loading` → không link cứng `libcudart` lúc
+  compile; thư viện CUDA được `dlopen` khi chọn `--device cuda`. Binary vẫn chạy
+  `--device cpu` bình thường trên máy không có NVIDIA.
+- **GPU (`--device cuda`)**: chỉ cần chạy binary release đã có (không cần build
+  lại), máy phải có GPU NVIDIA + driver/CUDA runtime:
+  ```bash
+  ./voice-train train overfit --device cuda ...
+  ```
 - Sanity: chạy 5 bước trên hai backend phải cho loss tương đương (khi có GPU để đối
   chiếu) — đây là một *gate* (mục g), không phải suy đoán.
 
-> `metal` (macOS) đã được loại khỏi stack — chỉ giữ `cpu` + `cuda` theo quyết định
-> từng nền tảng (Linux = flex+cuda, macOS nếu muốn thì branch riêng sau).
+> `metal` (macOS) đã được loại khỏi stack — chỉ giữ `cpu` + `cuda`.
 
 ##### c) Data bằng Python — `scripts/data/` (công cụ dev)
 

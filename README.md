@@ -50,18 +50,24 @@ cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train   # CI chạ
 > Trên Colab (không có Rust) dùng `./scripts/setup.sh` — tự tải thêm binary Linux
 > vào `./bin/`. Xem [`docs/colab-guide.md`](docs/colab-guide.md).
 
-### GPU (tùy chọn — build riêng)
+### GPU (tùy chọn — release đã có sẵn)
 
-Mặc định chỉ build CPU (`flex`). Muốn dùng GPU:
+Từ **v2.2.12**, mọi binary `voice-train` trên GitHub Release đã build kèm
+feature `cuda` (mặc định). Một binary duy nhất, hai cách dùng:
 
 ```bash
-# NVIDIA GPU (Linux) — cần CUDA toolkit
-cargo build --release -p voice-train --features cuda
-./target/release/voice-train train overfit --device cuda ...
+# CPU (mặc định — chạy trên mọi máy, incl. Colab)
+./voice-train train overfit --device cpu ...
+
+# CUDA (chỉ máy có GPU NVIDIA + driver/CUDA runtime)
+./voice-train train overfit --device cuda ...
 ```
 
-> Binary GPU **không** tải qua `fetch_bin.sh` / `cargo-dist` (chỉ CPU Linux x86_64).
-> Chỉ dùng trên máy có GPU + CUDA runtime (`libcudart`).
+> `cudarc` dùng `fallback-dynamic-loading`: không link cứng `libcudart` lúc
+> compile, nên binary vẫn chạy `--device cpu` trên máy không có NVIDIA. Chỉ
+> `--device cuda` yêu cầu GPU + driver thực tế.
+
+> `metal` (macOS) đã bị loại — chỉ giữ `cpu` + `cuda`.
 
 ## Model (không nằm trong git)
 

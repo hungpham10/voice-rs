@@ -11,6 +11,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # cargo unified feature graph: voice-train bật `cuda` làm default nên burn/cuda
+  # được kích hoạt cho toàn bộ workspace lúc test cùng lúc. Ép CPU cho test để
+  # tránh `Device::default()` fallback CUDA trên runner không có GPU NVIDIA.
+  BURN_DEVICE: flex
 
 jobs:
   test:
