@@ -15,6 +15,7 @@ burn = { workspace = true }
 voice-lib = { workspace = true }
 voice-mel = { workspace = true }
 voice-models = { workspace = true }
+voice-hubert = { workspace = true }
 hound = { workspace = true }
 clap = { workspace = true }
 rosa = { workspace = true }

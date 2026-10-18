@@ -1,22 +1,24 @@
-//! CLI hợp nhất cho đường huấn luyện VC 1→1 (§13.6.4a).
+//! CLI hợp nhất **một lệnh** cho đường VC 1→1 (§13.6.4a).
 //!
 //! ```text
-//! voice-train train overfit --wav ... --feats ... [--device cpu]
-//! voice-train train bridge  --train-manifest ... --val-manifest ... [--device cpu]
-//! voice-train render        --feats ... --adapter ... [--out-wav render.wav]
-//! voice-train eval          --val-manifest ... --adapter ... [--gate gate.toml]
+//! voice embed    --manifest train.csv [--skip-existing]   # hoặc --wav/--out cho 1 file
+//! voice train    --train-manifest ... --val-manifest ... [--device cpu|cuda]
+//! voice validate --val-manifest ... --adapter ... [--gate gate.toml]
+//! voice generate --feats ... --adapter ... [--out-wav render.wav]
+//! voice diag     --target ... --gen ... [--f0 f0.npy]
 //! ```
 //!
-//! - `train overfit` = GĐ4 (overfit 1 câu, integration test) — trước là bin
-//!   `train_adapter`.
-//! - `train bridge` = Luồng 1 (cầu nối nội dung nhiều giọng).
-//! - `render` = **suy diễn thuần** feats + adapter → wav (mặc định cả câu).
-//! - `eval` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
+//! - `embed` = sinh features ContentVec (HuBERT) — model nạp **một lần** rồi lặp
+//!   qua manifest (trước đây là bin `embed`/`embed_batch` của `voice-hubert`).
+//! - `train` = Luồng 1 (cầu nối nội dung nhiều giọng) — đường huấn luyện duy nhất;
+//!   chỉ `Adapter` học, `dec` đóng băng.
+//! - `validate` thoát với mã **1** khi vi phạm cổng — dùng trực tiếp trong CI/Colab.
+//! - `generate` = **suy diễn thuần** feats + adapter → wav (mặc định cả câu).
 //!
-//! Cả hai lệnh `train` đều hỗ trợ **checkpoint định kỳ** (`--checkpoint-every`)
-//! và **đẩy kết quả lên HuggingFace Hub** (`--push-to-hub`, mặc định tắt).
+//! `train` hỗ trợ **checkpoint định kỳ** (`--checkpoint-every`) và **đẩy kết quả
+//! lên HuggingFace Hub** (`--push-to-hub`, mặc định tắt).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
@@ -25,15 +27,14 @@ use voice_mel::MelConfig;
 use voice_models::dec::Generator;
 use voice_train::dataset::Dataset;
 use voice_train::hub::HubConfig;
-use voice_train::overfit::OverfitConfig;
-use voice_train::train::BridgeConfig;
-use voice_train::{device, eval, manifest, mel, overfit, render, train};
+use voice_train::train::TrainConfig;
+use voice_train::{device, eval, manifest, mel, render, train};
 
 #[derive(Parser)]
 #[command(
-    name = "voice-train",
+    name = "voice",
     version,
-    about = "Huấn luyện + đánh giá adapter VC 1→1"
+    about = "Huấn luyện + suy diễn VC 1→1 — một lệnh, nhiều subcommand"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -42,29 +43,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Huấn luyện
-    Train {
-        #[command(subcommand)]
-        what: TrainCmd,
-    },
-    /// Suy diễn: feats + adapter → wav (không huấn luyện; mặc định cả câu)
-    Render(RenderArgs),
+    /// Sinh features ContentVec cho manifest CSV hoặc 1 wav
+    Embed(EmbedArgs),
+    /// Huấn luyện Luồng 1 (nhiều giọng, chỉ `Adapter` học, `dec` đóng băng)
+    Train(TrainArgs),
     /// Đánh giá + cổng PASS/FAIL (mã thoát 1 khi FAIL)
-    Eval(EvalArgs),
+    Validate(EvalArgs),
+    /// Suy diễn: feats + adapter → wav (không huấn luyện; mặc định cả câu)
+    Generate(GenerateArgs),
     /// Chẩn đoán rè/nhiễu: mel-L1 theo band + voiced/unvoiced (PR-B1)
     Diag(DiagArgs),
 }
 
-#[derive(Subcommand)]
-enum TrainCmd {
-    /// GĐ4 — overfit 1 câu (integration test; chỉ `Adapter` học, `dec` đóng băng)
-    Overfit(OverfitArgs),
-    /// Luồng 1 — cầu nối nội dung nhiều giọng (chỉ `Adapter` học, `dec` đóng băng)
-    Bridge(BridgeArgs),
+/// Tham số `embed` — HuBERT/ContentVec → features `.npy`.
+///
+/// Dùng **manifest** (từng dòng 1 câu, model nạp 1 lần) hoặc **1 wav** đơn lẻ.
+#[derive(Args)]
+struct EmbedArgs {
+    /// Manifest CSV (cột: split,speaker_id,utt_id,wav_path,feats_path,duration).
+    #[arg(long, conflicts_with_all = ["wav", "out"])]
+    manifest: Option<PathBuf>,
+    /// 1 wav đơn lẻ 16 kHz mono (song song với `--manifest`).
+    #[arg(long)]
+    wav: Option<PathBuf>,
+    /// File `.npy` ghi ra (khi `--wav`).
+    #[arg(long, requires = "wav")]
+    out: Option<PathBuf>,
+    /// Chỉ xử lý dòng có `split` này (train/val). Bỏ trống = tất cả.
+    #[arg(long)]
+    split: Option<String>,
+    /// Bỏ qua câu đã có file features.
+    #[arg(long, default_value_t = false)]
+    skip_existing: bool,
+    /// Chỉ in kế hoạch, không chạy model.
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+    /// `cpu` | `cuda` (mặc định `cpu` cho dev; máy có NVIDIA có thể dùng cuda).
+    #[arg(long, default_value = "cpu")]
+    device: String,
 }
 
 #[derive(Args)]
-struct RenderArgs {
+struct GenerateArgs {
     #[arg(long, default_value = "sources/vits_ljs_dec")]
     dec_dir: PathBuf,
     /// Features ContentVec (`.npy`) — thường là của cả câu.
@@ -78,7 +98,7 @@ struct RenderArgs {
     /// `0` (mặc định) = cả câu; `>0` = giới hạn số frame latent.
     #[arg(long, default_value_t = 0)]
     seg: usize,
-    /// `cpu` | `cuda` | `metal` (mặc định cpu).
+    /// `cpu` | `cuda` (mặc định `cpu` cho dev; release binary ưu tiên CUDA).
     #[arg(long, default_value = "cpu")]
     device: String,
 }
@@ -111,39 +131,9 @@ impl HubArgs {
     }
 }
 
+/// Tham số `train` — Luồng 1: nhiều giọng từ manifest CSV.
 #[derive(Args)]
-struct OverfitArgs {
-    #[arg(long, default_value = "sources/vits_ljs_dec")]
-    dec_dir: PathBuf,
-    /// Wav giọng đích (16 kHz mono).
-    #[arg(long, default_value = "sources/422-122949-0031.wav")]
-    wav: PathBuf,
-    /// Features ContentVec (`.npy`) của wav đích.
-    #[arg(long, default_value = "sources/features/422-122949-0031.npy")]
-    feats: PathBuf,
-    #[arg(long, default_value = "test_output.wav")]
-    out_wav: PathBuf,
-    #[arg(long, default_value = "sources/features/adapter.bpk")]
-    out_adapter: PathBuf,
-    /// Số frame latent; `0` (mặc định) = **cả câu**, tự co theo dữ liệu thật.
-    #[arg(long, default_value_t = 0)]
-    seg: usize,
-    #[arg(long, default_value_t = 300)]
-    steps: usize,
-    #[arg(long, default_value_t = 1e-3)]
-    lr: f64,
-    /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` cạnh `--out-adapter`.
-    #[arg(long, default_value_t = 0)]
-    checkpoint_every: usize,
-    /// `cpu` | `cuda` | `metal` (mặc định cpu).
-    #[arg(long, default_value = "cpu")]
-    device: String,
-    #[command(flatten)]
-    hub: HubArgs,
-}
-
-#[derive(Args)]
-struct BridgeArgs {
+struct TrainArgs {
     /// Manifest các câu train (CSV hợp đồng).
     #[arg(long)]
     train_manifest: PathBuf,
@@ -172,14 +162,14 @@ struct BridgeArgs {
     /// `0` = tắt; `>0` = cứ mỗi N bước lưu `checkpoint.bpk` trong `--out-dir`.
     #[arg(long, default_value_t = 0)]
     checkpoint_every: usize,
-    /// `cpu` | `cuda` | `metal` (mặc định cpu).
+    /// `cpu` | `cuda` (mặc định `cpu` cho dev; release binary ưu tiên CUDA).
     #[arg(long, default_value = "cpu")]
     device: String,
     #[command(flatten)]
     hub: HubArgs,
 }
 
-#[derive(Parser)]
+#[derive(Args)]
 struct EvalArgs {    /// Manifest các câu val.
     #[arg(long)]
     val_manifest: PathBuf,
@@ -240,12 +230,10 @@ struct DiagArgs {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
-        Cmd::Train { what } => match what {
-            TrainCmd::Overfit(a) => run_overfit(a),
-            TrainCmd::Bridge(a) => run_bridge(a),
-        },
-        Cmd::Render(a) => run_render(a),
-        Cmd::Eval(a) => run_eval(a),
+        Cmd::Embed(a) => run_embed(a),
+        Cmd::Train(a) => run_train(a),
+        Cmd::Validate(a) => run_validate(a),
+        Cmd::Generate(a) => run_generate(a),
         Cmd::Diag(a) => run_diag(a),
     };
     match result {
@@ -257,43 +245,123 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_overfit(a: OverfitArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let hub = a.hub.resolve()?;
-    let device = device::select(&a.device)?;
+/// Một dòng manifest đã tách cho `embed`.
+struct EmbedRow {
+    split: String,
+    utt_id: String,
+    wav_path: String,
+    feats_path: String,
+}
 
-    let cfg = OverfitConfig {
-        dec_dir: a.dec_dir,
-        wav: a.wav,
-        feats: a.feats,
-        out_wav: a.out_wav.clone(),
-        out_adapter: a.out_adapter.clone(),
-        seg: a.seg,
-        steps: a.steps,
-        lr: a.lr,
-        checkpoint_every: a.checkpoint_every,
-    };
-    println!("== train overfit (device {}) ==", a.device);
-    let s = overfit::train_overfit(&cfg, &device)?;
-
-    // Đẩy kết quả (adapter cuối + checkpoint nếu có).
-    if let Some(hub) = &hub {
-        let mut files = vec![s.out_adapter.clone()];
-        if let Some(cp) = &s.checkpoint_path {
-            files.push(cp.clone());
+/// Đọc manifest cho `embed`: bỏ header, tách 6 cột, cho phép dòng trống.
+fn read_embed_manifest(path: &Path) -> Result<Vec<EmbedRow>, Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut rows = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || i == 0 {
+            continue;
         }
-        println!("== đẩy HuggingFace Hub ({}) ==", hub.repo);
-        hub.push(&files)?;
+        let cols: Vec<&str> = line.split(',').map(str::trim).collect();
+        if cols.len() != 6 {
+            return Err(format!("dòng {}: cần 6 cột, nhận {} — `{line}`", i + 1, cols.len()).into());
+        }
+        rows.push(EmbedRow {
+            split: cols[0].to_string(),
+            utt_id: cols[2].to_string(),
+            wav_path: cols[3].to_string(),
+            feats_path: cols[4].to_string(),
+        });
+    }
+    Ok(rows)
+}
+
+/// Sinh features cho 1 wav: HuBERT/ContentVec → `.npy` `[1, 768, T]`.
+fn embed_one_wav(
+    embedder: &voice_hubert::HubertEmbedder,
+    wav: &Path,
+    feats: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let samples = voice_hubert::wavio::preprocess_applio(voice_hubert::wavio::load_wav_mono(wav)?);
+    let embeddings = embedder.forward(&samples)?;
+    let dims: [usize; 3] = embeddings.shape().dims();
+    let values = embeddings.into_data().as_slice::<f32>().unwrap().to_vec();
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(format!("{}: features chứa NaN/Inf", wav.display()).into());
+    }
+    if let Some(parent) = feats.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    voice_hubert::wavio::save_npy3(feats, &values, dims)?;
+    println!("  ghi {} (shape {:?})", feats.display(), dims);
+    Ok(())
+}
+
+/// Subcommand `embed` — hai chế độ: manifest CSV (lặp từng câu) hoặc 1 wav.
+fn run_embed(a: EmbedArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    match (&a.manifest, &a.wav) {
+        (Some(_), None) => {}
+        (None, Some(w)) => {
+            let out = a.out.as_ref().ok_or("--wav cần --out <feats.npy>")?;
+            let device = device::select(&a.device)?;
+            let embedder = voice_hubert::HubertEmbedder::new_with_device(device)?;
+            println!("== voice embed (device {:?}) ==", embedder.device());
+            embed_one_wav(&embedder, w, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        _ => {
+            return Err("cần --manifest <csv> HOẶC --wav <in.wav> --out <feats.npy>".into());
+        }
     }
 
-    if !(s.ratio.is_finite() && s.ratio > 1.0) {
-        eprintln!("\n❌ loss KHÔNG giảm — kiểm dữ liệu/lr");
-        return Ok(ExitCode::from(1));
+    let manifest = a.manifest.as_ref().unwrap();
+    let rows = read_embed_manifest(manifest)?;
+    let todo: Vec<&EmbedRow> = rows
+        .iter()
+        .filter(|r| {
+            a.split
+                .as_deref()
+                .map(|s| r.split.eq_ignore_ascii_case(s))
+                .unwrap_or(true)
+        })
+        .filter(|r| !(a.skip_existing && Path::new(&r.feats_path).exists()))
+        .collect();
+
+    println!(
+        "== voice embed: manifest {} · {} dòng · {} cần xử lý ==",
+        manifest.display(),
+        rows.len(),
+        todo.len()
+    );
+    if a.dry_run {
+        for r in &todo {
+            println!("  {} → {}", r.wav_path, r.feats_path);
+        }
+        return Ok(ExitCode::SUCCESS);
     }
-    println!("\nPASS — loss giảm {:.2}×", s.ratio);
+    if todo.is_empty() {
+        println!("không có gì để làm");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let device = device::select(&a.device)?;
+    let embedder = voice_hubert::HubertEmbedder::new_with_device(device)?;
+    println!("device: {:?}", embedder.device());
+
+    for (i, r) in todo.iter().enumerate() {
+        if !Path::new(&r.wav_path).exists() {
+            return Err(format!("{} chưa có (wav)", r.wav_path).into());
+        }
+        println!("[{}/{}] {}", i + 1, todo.len(), r.utt_id);
+        embed_one_wav(&embedder, Path::new(&r.wav_path), Path::new(&r.feats_path))?;
+    }
+    println!("✔ xong embed");
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let hub = a.hub.resolve()?;
     let device = device::select(&a.device)?;
 
@@ -310,7 +378,7 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let train_ds = Dataset::load(&train_entries)?;
     let val_ds = Dataset::load(&val_entries)?;
 
-    let cfg = BridgeConfig {
+    let cfg = TrainConfig {
         dec_dir: a.dec_dir,
         out_dir: a.out_dir,
         seg: a.seg,
@@ -321,8 +389,8 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         seed: a.seed,
         checkpoint_every: a.checkpoint_every,
     };
-    println!("== train bridge (device {}) ==", a.device);
-    let s = train::train_bridge(&train_ds, &val_ds, &cfg, &device)?;
+    println!("== voice train (device {}) ==", a.device);
+    let s = train::run_training(&train_ds, &val_ds, &cfg, &device)?;
 
     let ratio = s.first / s.last;
     println!(
@@ -357,7 +425,7 @@ fn run_bridge(a: BridgeArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_render(a: RenderArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn run_generate(a: GenerateArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let device = device::select(&a.device)?;
     let cfg = render::RenderConfig {
         dec_dir: a.dec_dir,
@@ -366,7 +434,7 @@ fn run_render(a: RenderArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         out_wav: a.out_wav,
         seg: a.seg,
     };
-    println!("== render (device {}) ==", a.device);
+    println!("== voice generate (device {}) ==", a.device);
     let s = render::render(&cfg, &device)?;
     println!(
         "sinh {} frame latent = {} mẫu = {:.2} s → {}",
@@ -378,7 +446,7 @@ fn run_render(a: RenderArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_eval(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let device = device::select(&a.device)?;
 
     let entries = manifest::read(&a.val_manifest)?;
@@ -552,7 +620,7 @@ fn run_diag(a: DiagArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
 }
 
 fn print_report(r: &eval::EvalReport) {
-    println!("\n== eval ==");
+    println!("\n== voice validate ==");
     println!("câu: {} · giọng: {}", r.per_utt.len(), r.per_speaker.len());
     println!("mel-L1 trung bình  : {:.5}", r.mean_mel_l1);
     println!("speaker_gap        : {:.4}", r.speaker_gap);

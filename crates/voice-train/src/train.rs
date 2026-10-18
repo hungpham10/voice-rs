@@ -1,4 +1,4 @@
-//! `train bridge` — Luồng 1: cầu nối nội dung nhiều giọng (§13.6.4f).
+//! `voice train` — Luồng 1: cầu nối nội dung nhiều giọng (§13.6.4f).
 //!
 //! Chỉ `Adapter` (`Linear(768→192)`) học; `dec` **đóng băng**. Mỗi bước lấy một
 //! batch **cân bằng theo giọng** (round-robin), mỗi giọng một câu ngẫu nhiên, cắt
@@ -19,9 +19,9 @@ use voice_models::dec::Generator;
 use crate::dataset::{Dataset, Rng, HUBERT_HZ, LATENT_HZ, SAMPLES_PER_FRAME};
 use crate::{eval, mel};
 
-/// Cấu hình `train bridge`.
+/// Cấu hình `voice train`.
 #[derive(Debug, Clone)]
-pub struct BridgeConfig {
+pub struct TrainConfig {
     pub dec_dir: PathBuf,
     pub out_dir: PathBuf,
     /// Số frame latent mỗi mẫu (tự co theo câu ngắn nhất).
@@ -39,7 +39,7 @@ pub struct BridgeConfig {
 
 /// Kết quả huấn luyện.
 #[derive(Debug, Clone)]
-pub struct BridgeSummary {
+pub struct TrainingSummary {
     pub first: f64,
     pub last: f64,
     pub best_val: f64,
@@ -54,12 +54,12 @@ pub struct BridgeSummary {
 }
 
 /// Huấn luyện cầu nối. `device` là CPU/… trước autodiff (hàm tự bật autodiff).
-pub fn train_bridge(
+pub fn run_training(
     train_ds: &Dataset,
     val_ds: &Dataset,
-    cfg: &BridgeConfig,
+    cfg: &TrainConfig,
     device: &Device,
-) -> Result<BridgeSummary, Box<dyn std::error::Error>> {
+) -> Result<TrainingSummary, Box<dyn std::error::Error>> {
     let c = train_ds.check_dims()?;
     val_ds.check_dims()?;
     if val_ds.utts.is_empty() {
@@ -203,7 +203,7 @@ pub fn train_bridge(
     adapter.save(&adapter_path)?;
     best_adapter.save(&best_path)?;
 
-    Ok(BridgeSummary {
+    Ok(TrainingSummary {
         first,
         last,
         best_val,

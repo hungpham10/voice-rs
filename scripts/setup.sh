@@ -66,9 +66,6 @@ cat <<'EOF'
   python scripts/data/prepare.py vivos --download --out data/vivos --limit-per-speaker 20
   python scripts/data/split.py --manifest data/vivos/manifest_raw.csv --out-dir data/vivos --val-ratio 0.1
 
-  # smoke overfit 1 câu (nhanh)
-  SEG=86 STEPS=250 ./scripts/run_training.sh
-
-  # Luồng 1 — nhiều giọng (VIVOS)
-  DATA=data/vivos ./scripts/run_bridge_training.sh
+  # script huấn luyện duy nhất — nhiều câu/nhiều giọng (VIVOS): embed → train → validate
+  DATA=data/vivos ./scripts/run_training.sh
 EOF

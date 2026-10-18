@@ -1,8 +1,8 @@
 name: ci
 
-# Chỉ chạy UNIT TEST. Không tải asset nặng, không build các crate cần ONNX lúc build
-# (`voice-hubert`, `voice-f0` có `build.rs` exit(1) nếu thiếu model) — nên CI chỉ
-# kiểm 4 crate thuần logic.
+# Chỉ chạy UNIT TEST. `voice-train` giờ phụ thuộc `voice-hubert` (subcommand
+# `voice embed`) nên cần model ContentVec ONNX lúc build — tải có CACHE, chỉ
+# lần đầu chậm. `voice-f0` (rmvpe) vẫn không build trong CI.
 on:
   push:
     branches: [main]
@@ -23,5 +23,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Cache sources/contentvec (ONNX cho voice-hubert build.rs)
+        uses: actions/cache@v4
+        with:
+          path: sources/contentvec
+          key: contentvec-768l12-onnx-v1
+      - name: Fetch model assets (nếu cache hụt)
+        run: ./scripts/fetch_assets.sh
       - name: Unit tests (voice-lib, voice-mel, voice-models, voice-train)
         run: cargo test -p voice-lib -p voice-mel -p voice-models -p voice-train

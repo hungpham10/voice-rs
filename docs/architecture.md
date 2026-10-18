@@ -544,7 +544,7 @@ cửa sổ ±4 quanh argmax, `cents_mapping = 20·arange(360) + 1997.3794`, và
 | `voice-f0` | RMVPE, f0 @ 100 Hz | ✅ xong, 🔶 chờ chốt §13.4 |
 | `voice-models` | **VITS HiFi-GAN generator** (`dec`), viết tay | ✅ verify `1.26e-08` |
 | `voice-lib` | **Thư viện dùng chung**: `cc` (tách dấu câu, chia frame, `.srt`) + `vc` (`Adapter` Burn P1, nội suy frame rate, resample PCM) | 🟡 logic + `Adapter` xong (**43 unit test**) |
-| `voice-train` | **Huấn luyện + validate + suy diễn**: log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`; một bin gom subcommand `train overfit` (§13.6.2), `train bridge` / `render` / `eval` (§13.6.4), kèm checkpoint định kỳ + đẩy HuggingFace Hub | ✅ nhiều giọng + gate PASS/FAIL — §13.6.4 |
+| `voice-train` | **Một lệnh `voice`** (huấn luyện + validate + suy diễn + embed): log-mel khả vi bằng Burn (`burn::signal::stft`), loss `L1`; bin `voice` gom subcommand `embed` / `train` / `validate` / `generate` / `diag` (§13.6.4), kèm checkpoint định kỳ + đẩy HuggingFace Hub | ✅ nhiều giọng + gate PASS/FAIL — §13.6.4 |
 
 `voice-lib` là mục đích cho **bên ngoài** dùng; **training + validate** nằm ở
 `voice-train` — `voice-lib` không được phụ thuộc `sources/` hay build
@@ -697,23 +697,22 @@ python3 scripts/screen_onnx.py <model.onnx>
 cargo run --release -p voice-mel --example verify_speecht5
 
 # Các tầng đã xong
-cargo run --release -p voice-hubert --bin embed -- <wav>                # verify
-cargo run --release -p voice-hubert --bin embed -- <wav> <out.npy>      # + ghi features [1,T,768]
+cargo run --release -p voice-train --bin voice -- embed --wav <w16k.wav> --out <feats.npy>      # + ghi features [1,T,768]
 cargo run --release -p voice-f0    --example f0_extract -- <wav>            # verify
 
-# Huấn luyện adapter overfit 1 câu (GĐ4) — cần sources/vits_ljs_dec + features + wav, xem §13.6.2
-cargo run --release -p voice-train --bin voice-train -- train overfit            # cả câu (--seg 0)
-cargo run --release -p voice-train --bin voice-train -- train overfit --seg 86 --steps 40  # smoke 1 s
+# Huấn luyện Luồng 1 — cần sources/vits_ljs_dec + features + manifest, xem §13.6.4
+cargo run --release -p voice-train --bin voice -- train --train-manifest train.csv --val-manifest val.csv            # huấn luyện đủ dữ liệu
+cargo run --release -p voice-train --bin voice -- embed   --manifest train.csv --skip-existing   # sinh features
 
 # Suy diễn thuần: adapter đã train → wav cả câu (không huấn luyện lại)
-cargo run --release -p voice-train --bin voice-train -- render \
+cargo run --release -p voice-train --bin voice -- generate \
     --feats sources/features/422-122949-0031.npy --adapter sources/features/adapter.bpk --out-wav full.wav
 
 # Luồng 1 nhiều giọng (§13.6.4) — dữ liệu qua scripts/data/ trước
-cargo run --release -p voice-hubert --bin embed_batch -- --manifest data/vivos/train.csv --skip-existing
-cargo run --release -p voice-train  --bin voice-train  -- train bridge \
+cargo run --release -p voice-train --bin voice -- embed --manifest data/vivos/train.csv --skip-existing
+cargo run --release -p voice-train --bin voice -- train \
     --train-manifest data/vivos/train.csv --val-manifest data/vivos/val.csv --out-dir data/vivos/bridge
-cargo run --release -p voice-train  --bin voice-train  -- eval \
+cargo run --release -p voice-train --bin voice -- validate \
     --val-manifest data/vivos/val.csv --adapter data/vivos/bridge/adapter_best.bpk  # exit 1 khi FAIL
 
 cargo build --workspace
@@ -1156,7 +1155,7 @@ Kết cấu nguồn `f0.npy` cho câu mẫu:
 
 ```bash
 cargo run --release -p voice-f0 --example f0_export -- sources/422-122949-0031.wav f0.npy
-cargo run --release -p voice-train --bin voice-train -- diag \
+cargo run --release -p voice-train --bin voice -- diag \
   --target sources/422-122949-0031.wav --gen gen.wav --f0 f0.npy --out-csv diag.csv
 ```
 
@@ -1287,7 +1286,7 @@ công suất), sàn `1e-5` rồi `ln`.
 Unit test `burn_mel_matches_rosa` giữ hai đường khớp: max diff `5.3e-3`, mean
 `2.1e-4` trên 87 frame (khác biệt chỉ do sai số `f32` của hai cách STFT).
 
-**Vòng huấn luyện** (`src/overfit.rs`, subcommand `train overfit`):
+**Vòng huấn luyện** (`src/train.rs`, subcommand `voice train`):
 `feats [1,768,T_h] → Adapter → z [1,192,t_out] → dec (freeze) → wav → log-mel`,
 `loss = L1(mel_gen, mel_target)`, Adam `lr=1e-3`. Wav đích 16 kHz được
 `resample_linear` lên 22.05 kHz **ngoài mạng** rồi cắt còn `t_out·256` mẫu.
@@ -1394,8 +1393,8 @@ phút** audio giọng đích là đủ (khác hẳn 6.84 s hiện có — xem §
 | Crate | Việc |
 |---|---|
 | `voice-lib/vc` | *(Luồng 2)* thêm `Timbre` (FiLM); `Adapter::forward_with_timbre(feats, timbre, t_out)` |
-| `voice-hubert` | ✅ `embed_batch` đọc **danh sách** file (manifest) — §13.6.4 |
-| `voice-train` | ✅ `train bridge` (batch cân bằng theo speaker); *(Luồng 2)* `train timbre` |
+| `voice` | ✅ `embed` đọc **danh sách** file (manifest) — §13.6.4 |
+| `voice-train` | ✅ `train` (batch cân bằng theo speaker); *(Luồng 2)* `train timbre` |
 | dữ liệu | ✅ `scripts/data/` tải + tách VIVOS/CV/viVoice thành `(wav, feats)` theo speaker |
 
 > 📋 Chi tiết đầy đủ (CLI, data Python, hợp đồng CSV, chia train/validate, gate
@@ -1434,20 +1433,20 @@ bin vạn năng", ta có:
 
 ```
 voice-train  (bin `voice-train`, crate voice-train)
-├── train overfit  # GĐ4 — overfit 1 câu (integration test), chỉ học Linear(768→192)
-├── train bridge   # đóng băng dec, chỉ học Linear(768→192) — nhiều giọng
+├── train          # đóng băng dec, chỉ học Linear(768→192) — nhiều giọng (trước: `train bridge`)
 ├── render         # suy diễn thuần: feats + adapter → wav (mặc định cả câu; không train)
 └── eval           # chấm điểm + gate (mục g) → exit code 1 khi FAIL
 
-voice-hubert (bin `embed_batch`, crate voice-hubert)
+voice (bin `voice`, crate voice-train — subcommand `embed`)
 └── --manifest …   # sinh ContentVec 768@50Hz (.npy) cho cả manifest, bỏ qua file đã có
 ```
 
-`train overfit` (overfit 1 câu, §13.6.2) là integration test một-câu, khác mục
-đích với `train bridge` (nhiều giọng); trước là bin riêng `train_adapter`, nay gom
-vào cùng bin `voice-train` (một công cụ thống nhất nhiều subcommand).
+`train overfit` (overfit 1 câu, §13.6.2) đã **bỏ** — đường huấn luyện duy nhất là
+`voice train` (nhiều giọng); smoketest = manifest 1 câu. Trước là bin riêng
+`train_adapter`, sau gom `voice-train`, nay là bin **`voice`** — một công cụ
+thống nhất nhiều subcommand: `embed` / `train` / `validate` / `generate` / `diag`.
 
-Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
+Nhóm cờ dùng chung của `train`:
 
 - **Checkpoint định kỳ** — `--checkpoint-every N` (`0` = tắt): cứ `N` bước ghi
   `checkpoint.bpk` (bridge: trong `--out-dir`; overfit: cạnh `--out-adapter`) để
@@ -1482,7 +1481,7 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
 - **GPU (`--device cuda`)**: chỉ cần chạy binary release đã có (không cần build
   lại), máy phải có GPU NVIDIA + driver/CUDA runtime:
   ```bash
-  ./voice-train train overfit --device cuda ...
+  ./voice train --device cuda ...
   ```
 - Sanity: chạy 5 bước trên hai backend phải cho loss tương đương (khi có GPU để đối
   chiếu) — đây là một *gate* (mục g), không phải suy đoán.
@@ -1508,7 +1507,7 @@ Cả hai subcommand `train` nhận thêm hai nhóm cờ dùng chung:
 `vivvoice`) — tất cả **bắn ra cùng định dạng CSV** (mục d). Rust **không** biết
 đặc thù dataset nào. Thêm bộ mới = thêm subcommand Python.
 
-> **Không có `audio2features.py`:** batch ContentVec làm bằng **Rust** (`embed_batch`,
+> **Không có `audio2features.py`:** batch ContentVec làm bằng **Rust** (`voice embed`,
 > bin của `voice-hubert`) — giữ đúng tinh thần "runtime 100% Rust", Python chỉ chạm
 > vào dữ liệu thô.
 
@@ -1528,9 +1527,9 @@ Python mà quên Rust thì CI bắt ngay.
   `--val-ratio` (mặc định `0.1`), bằng băm `sha256(utt_id)` **cố định** → chạy lại
   cho cùng kết quả, không cần lưu seed.
 
-##### f) Huấn luyện `train bridge`
+##### f) Huấn luyện `voice train`
 
-- **Chỉ `Linear(768→192)` học**; `dec` (14.33 M) **đóng băng** — y hệt `train overfit`
+- **Chỉ `Linear(768→192)` học**; `dec` (14.33 M) **đóng băng**
   §13.6.2, giờ mở rộng cho nhiều câu/nhiều giọng.
 - **Batch cân bằng theo speaker** (con trỏ round-robin): mỗi batch lấy đều các giọng
   → gradient về bridge là trung bình → đây chính là cơ chế "quên timbre" của Pha A
@@ -1573,10 +1572,10 @@ committed audio nặng — "golden" = cặp `(val.csv cố định, summary.json
 | Mốc | Nội dung | Trạng thái |
 |---|---|---|
 | **A** | `clap` subcommand + `scripts/data/` (`prepare`, `split --val-ratio`) + CSV + contract test | ✅ |
-| **B** | `embed_batch --manifest` (batch, chạy lại bỏ qua file đã có) | ✅ |
-| **C** | `train bridge` (batch cân bằng, seed, checkpoint best) + `--device` | ✅ |
+| **B** | `voice embed --manifest` (batch, chạy lại bỏ qua file đã có) | ✅ |
+| **C** | `voice train` (batch cân bằng, seed, checkpoint best) + `--device` | ✅ |
 | **D** | `eval` + gate (`key = value`) + `summary.json`/`--baseline` → exit 1 khi FAIL | ✅ |
-| **E** | script Colab `run_bridge_training.sh` + cập nhật `architecture.md`/`colab-guide.md` | ✅ |
+| **E** | script Colab `run_training.sh` + cập nhật `architecture.md`/`colab-guide.md` | ✅ |
 | **F** | *(sau)* Luồng 2 — kNN retrieval / FiLM (§13.6.3) | ⏳ |
 
 Smoke test thật (1 giọng, `sources/bridge_smoke/`): train 6 bước + eval cho
@@ -2450,7 +2449,7 @@ người dùng tự tải khi cần). Bundle kèm `SHA256SUMS` để `fetch_asse
 |---|---|---|
 | `.github/workflows/ci.yml` | push `main` / PR / tay | **chỉ unit test** 4 crate thuần logic (`voice-lib`, `voice-mel`, `voice-models`, `voice-train`). Không tải asset. |
 | `.github/workflows/release-assets.yml` | `workflow_dispatch` | kéo model theo `scripts/asset_checksums.txt` (HF) + verify sha256 → đóng gói `voice-assets.tar.gz` + `f0-assets.tar.gz` → publish Release. **Không Python/torch** — trọng số `vits_ljs_dec/*.npy` đã đóng băng trên HF. |
-| `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`embed`, `embed_batch`, `voice-train`, `verify_dec`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
+| `.github/workflows/release.yml` (cargo-dist sinh) | push tag `v*` | build **binary** Linux x86_64 (`voice`, `verify_dec`) với `cargo-dist` → publish lên GitHub Release. `.github/build-setup.yml` nạp model trước khi build và bật `VOICE_EMBED_WEIGHTS=1`. |
 
 > CI cố ý **không** build `voice-hubert`/`voice-f0`: `build.rs` của chúng `exit(1)`
 > khi thiếu ONNX, mà CI không tải asset. Đó là lý do chỉ test 4 crate.
@@ -2466,7 +2465,7 @@ nào** — backend Burn là `Flex` (thuần Rust), không OpenSSL, `libz`, glib,
 Binary chỉ link `libc`/`libm`/`libgcc` (đều có sẵn trên mọi distro Linux) nên chạy
 được trên Colab mà không cần cài thêm gì.
 
-`embed` và `embed_batch` **nhúng trọng số ContentVec** vào binary
+Khai báo payload — trước đây mỗi crate một bin riêng, **nay bin `voice` gộp họ**
 (`VOICE_EMBED_WEIGHTS=1` → `include_bytes!` file `.bpk`) để binary tự chứa; vì vậy
 mỗi cái ~373 MB. Các binary còn lại nhỏ (đọc `dec` từ `sources/vits_ljs_dec/*.npy`
 lúc chạy).
@@ -2478,9 +2477,8 @@ lúc chạy).
 | `scripts/setup.sh [--f0] [--no-bin] [--no-deps]` | **Cài một lệnh**: model (`sources/`) + binary (`bin/`) + phụ thuộc Python; idempotent. Colab dùng thẳng, máy dev thêm `--no-bin`. |
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
-| `scripts/fetch_bin.sh [tag]` | tải binary đã build (`embed`, `embed_batch`, `voice-train`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
-| `scripts/run_training.sh` | `SEG=86 STEPS=250 LR=1e-3 ./scripts/run_training.sh` — (features nếu thiếu) → **validation** (`verify_dec`) → **training** (`voice-train train overfit`); `SEG=full` để học cả câu; ưu tiên `./bin/`, thiếu thì `cargo run`. |
-| `scripts/run_bridge_training.sh` | `DATA=data/vivos ./scripts/run_bridge_training.sh` — dataset → `embed_batch` → `train bridge` → `eval` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). |
+| `scripts/fetch_bin.sh [tag]` | tải binary đã build (`voice`, `verify_dec`) → `./bin/`, verify qua GitHub Release. |
+| `scripts/run_training.sh` | `DATA=data/vivos ./scripts/run_training.sh` — đường huấn luyện duy nhất: `voice embed` → `voice train` → `voice validate` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). |
 | `scripts/data/*.py` | công cụ dev chuẩn hoá + chia dataset → CSV cho Rust đọc (§13.6.4c). |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`
@@ -2512,14 +2510,14 @@ Colab free ~2 core; laptop dev ~10 core với `dec` forward+backward ở 589 fra
 ### 16.6 ✅ Chuẩn bị dữ liệu — Python (dev), không phải runtime
 
 Luồng 1 (§13.6.4) thêm một khâu **chạy tay bằng Python** ở *trước* đường Rust:
-chuẩn hoá + chia dataset → `train.csv`/`val.csv`. Rust (`embed_batch`, `voice-train
-train bridge`, `voice-train eval`) chỉ đọc CSV theo hợp đồng §13.6.4d.
+chuẩn hoá + chia dataset → `train.csv`/`val.csv`. Rust (`voice embed`, `voice
+train`, `voice validate`) chỉ đọc CSV theo hợp đồng §13.6.4d.
 
 | | Ở đâu | Vì sao |
 |---|---|---|
 | Runtime / suy luận | **100% Rust** | không đổi |
 | Chuẩn bị dữ liệu | `scripts/data/*.py` (dev) | tải + nhiều định dạng dataset — cùng loại với `scripts/screen_onnx.py` |
-| Sinh features (ContentVec) | **Rust** `embed_batch` | giữ runtime 100% Rust, Python chỉ chạm dữ liệu thô |
+| Sinh features (ContentVec) | **Rust** `voice embed` | giữ runtime 100% Rust, Python chỉ chạm dữ liệu thô |
 | CI | **contract test** trên CSV mẫu (`manifest::header_must_match`) | đổi cột ở Python không làm hỏng Rust lúc runtime |
 
 Menu dataset khảo sát (chi tiết §13.6.3): VIVOS (16 kHz mono), Common Voice `vi`

@@ -1,6 +1,6 @@
 # Steps injected by cargo-dist into the `build-local-artifacts` job, right after
 # checkout. Fetches the source models so the `voice-hubert` build script can
-# codegen, and turns on weight embedding so the shipped `embed` binary is
+# codegen, and turns on weight embedding so the shipped `voice` binary is
 # self-contained (no `.bpk` file needed at runtime).
 - name: Fetch model assets (ONNX)
   run: ./scripts/fetch_assets.sh --f0
