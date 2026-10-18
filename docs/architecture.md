@@ -1146,6 +1146,40 @@ không `emb_pitch`, không `m_source`. Đây là phần ta phải tự thêm ho�
 | **(a)** | Chấp nhận mất cao độ — pitch chỉ là *đầu vào* | prosody sai; đặc biệt thanh điệu tiếng Việt (ngã/huyền/sắc/hỏi) là thứ HuBERT gần như không giữ |
 | **(b)** | Tìm vocoder NSF xuất sạch | quay lại **đúng bài toán `Expand[0]`** đã trốn 4 lần (§1.3) |
 
+##### 13.4.0 ✅ PR-B1 — chẩn đoán đo được: `voice-train diag`
+
+Công cụ (đang ở PR `feat/nsf-diag`): `voice-train diag --target target.wav --gen gen.wav
+[--f0 f0.npy] [--out-csv diag.csv]` — mel-L1 theo band (80–1k / 1k–4k / 4k–8k)
+và **voiced vs unvoiced** (mask từ RMVPE `voice-f0`, ví dụ `f0_export`).
+
+Kết cấu nguồn `f0.npy` cho câu mẫu:
+
+```bash
+cargo run --release -p voice-f0 --example f0_export -- sources/422-122949-0031.wav f0.npy
+cargo run --release -p voice-train --bin voice-train -- diag \
+  --target sources/422-122949-0031.wav --gen gen.wav --f0 f0.npy --out-csv diag.csv
+```
+
+**Lần chạy đầu (adapter overfit hiện tại, gen vs target 6.84 s, 590 frame):**
+
+| Số liệu | Giá trị |
+|---|---|
+| mel-L1 toàn phổ | `1.6376` |
+| low 80–1k | `1.4540` |
+| mid 1k–4k | `1.7181` |
+| high 4k–8k | `1.8190` |
+| **voiced** (70 % frame) | `1.6590` |
+| **unvoiced** | `1.5876` |
+
+**Đọc:** voiced ≈ unvoiced (1.66 vs 1.59) và **mọi band đều lệch sâu** → pattern (a):
+**z ngoài manifold của `dec`** (bridge lỗi/thiếu dữ liệu), **không phải** thiếu
+excitation. Kết quả này hạ độ ưu tiên NSF-lite (PR-D) và nâng ưu tiên cải thiện
+bridge: mở rộng tập dữ liệu (nhiều câu/giọng) trước khi đụng NSF. NSF vẫn để ngỏ
+như hướng sau — trước khi cắm f0, trước tiên phải xử phân bố `z` của bridge.
+
+> Mỗi thay đổi bridge phải re-run `diag` để đo lại nguyên nhân trước khi quyết
+> đụng vào NSF (PR-C/PR-D).
+
 Thêm một điểm phải biết trước khi đo: `voice-hubert` hiện cho 50 Hz, RMVPE cho
 100 Hz, generator cần 86.13 Hz → **cả hai luồng phải về cùng một tần số**, và việc
 này **không độc lập** với chọn (a) hay (b).
