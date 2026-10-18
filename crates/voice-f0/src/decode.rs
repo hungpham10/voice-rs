@@ -126,7 +126,7 @@ mod tests {
         }
         let salience = Tensor::<3, Float>::from_data(
             TensorData::new(data, [1, N_CLASS, n_frames]), 
-            &Default::default()
+            &burn::tensor::Device::flex()
         );
 
         let f0 = decode(&salience);
@@ -168,7 +168,7 @@ mod tests {
         }
         let salience = Tensor::<3, Float>::from_data(
             TensorData::new(data, [1, N_CLASS, n_frames]),
-            &Default::default()
+            &burn::tensor::Device::flex()
         );
 
         let f0 = decode(&salience);
@@ -193,7 +193,7 @@ mod tests {
         }
         let salience = Tensor::<3, Float>::from_data(
             TensorData::new(data, [1, N_CLASS, n_frames]),
-            &Default::default()
+            &burn::tensor::Device::flex()
         );
 
         let f0 = decode(&salience);
