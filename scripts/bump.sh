@@ -8,8 +8,7 @@ set -euo pipefail
 #   ./bump.sh minor     # 2.2.14 -> 2.3.0
 #   ./bump.sh major     # 2.2.14 -> 3.0.0
 #   ./bump.sh 2.3.1     # đặt version cụ thể
-#
-# Chạy từ repo root: scripts/bump.sh [major|minor|patch|X.Y-Z]
+
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
@@ -53,7 +52,6 @@ if [[ "$NEW_VERSION" == "$CURRENT_VERSION" ]]; then
   exit 0
 fi
 
-# Guard: working tree phải sạch (trước khi bump) để commit bump không kéo thay đổi lạ.
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "❌ Working tree chưa sạch. Hãy commit/stash các thay đổi trước khi bump." >&2
   git status --porcelain >&2
@@ -68,13 +66,10 @@ fi
 
 echo "Bump: $CURRENT_VERSION → $NEW_VERSION (branch: $BRANCH)"
 
-# Cập nhật version trong root Cargo.toml (chỉ dòng version của workspace.package).
-sed -i '' -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"$NEW_VERSION\"/" "$CARGO_TOML"
+NEW_VERSION_PERL="$NEW_VERSION" perl -pi -e "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$ENV{NEW_VERSION_PERL}\"/" "$CARGO_TOML"
 
-# Cập nhật Cargo.lock.
 cargo update --workspace --quiet
 
-# Commit (ký SSH theo qui ước repo: hung0913208@icloud.com).
 git add "$CARGO_TOML" Cargo.lock
 if [[ -n "$(git diff --cached --name-only)" ]]; then
   git commit -S -m "chore: bump version to $NEW_VERSION"
@@ -83,3 +78,4 @@ if [[ -n "$(git diff --cached --name-only)" ]]; then
 else
   echo "ℹ️  Không có thay đổi để commit."
 fi
+
