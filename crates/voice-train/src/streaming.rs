@@ -58,64 +58,46 @@ pub fn energy_profile_feats(feats_cm: &[f32], t_h: usize, c: usize) -> Vec<f32> 
     energy
 }
 
-/// Chọn offset toàn cục `o ∈ [0, grid)` sao cho tổng energy tại các điểm cắt
-/// `{o + k*chunk | k = 1..n_chunks-1}` là nhỏ nhất.
-/// grid = max(1, chunk / 2). Tie → offset nhỏ nhất (deterministic).
-fn best_offset(total: usize, chunk: usize, energy: &[f32]) -> usize {
-    if chunk == 0 || total <= chunk {
-        return 0;
+/// Chia `[0, total)` thành các chunk kiểu **Applio**: mỗi biên cắt tự tìm điểm
+/// **energy min** trong cửa sổ `±W` quanh mốc nominal `s + chunk`
+/// (`W = chunk/4`) — biên rơi trúng chỗ nghỉ tự nhiên của giọng đọc.
+/// - `chunk == 0` hoặc `total < chunk` → 1 chunk nguyên câu (nếu ≥ MIN_SEG).
+/// - Ràng buộc: mỗi chunk ≥ MIN_SEG (đáy STFT/c loss).
+/// - Đuôi cuối giữ nếu ≥ MIN_SEG (đáy thật; bỏ rule 50% cũ).
+/// - Độ dài chunk biến động `±W` — train/eval pad + mask nên không vấn đề.
+/// Tie → cắt sớm nhất (leftmost min, tương đương `np.where(min)` của Applio).
+pub fn plan_chunks(total: usize, chunk: usize, energy: &[f32]) -> Vec<(usize, usize)> {
+    if chunk == 0 || total < chunk {
+        return if total >= MIN_SEG { vec![(0, total)] } else { Vec::new() };
     }
-    let grid = (chunk / 2).max(1);
-    let n_chunks = total / chunk;
-    if n_chunks <= 1 {
-        return 0;
+    if total < MIN_SEG {
+        return Vec::new();
     }
-    let mut best_o = 0;
-    let mut best_sum = f32::INFINITY;
-    for o in 0..grid {
-        let mut sum = 0.0f32;
-        for k in 1..n_chunks {
-            let cut = o + k * chunk;
-            if cut < energy.len() {
-                sum += energy[cut];
+    let w = (chunk / 4).max(1);
+    let mut chunks = Vec::new();
+    let mut s = 0usize;
+    while total - s > chunk {
+        let n = s + chunk;
+        // Cắt không vượt mốc nominal (n) → mọi chunk ≤ chunk_frames (batch pad bền vững).
+        let lo = (n - w).max(s + MIN_SEG + 1);
+        let hi = (n + w).min(total).min(n).min((total - MIN_SEG).max(lo));
+        // energy ngoài mảng coi như ∞ → chỉ chọn điểm có dữ liệu.
+        let mut cut = None;
+        let mut best_e = f32::INFINITY;
+        for c in lo..=hi {
+            let e = energy.get(c).copied().unwrap_or(f32::INFINITY);
+            if e < best_e {
+                best_e = e;
+                cut = Some(c);
             }
         }
-        if sum < best_sum {
-            best_sum = sum;
-            best_o = o;
-        }
+        let Some(c) = cut else { break };
+        chunks.push((s, c - s));
+        s = c;
     }
-    best_o
-}
-
-/// Chia `[0, total)` thành các chunk dài đúng `chunk` frame.
-/// - `chunk == 0` → 1 chunk `(0, total)` (cả câu).
-/// - `total < chunk` → rỗng.
-/// - Chỉ trả về chunk có `len == chunk` (đuôi < chunk bị bỏ).
-/// - Biên cắt = `best_offset(total, chunk, energy) + k*chunk`.
-pub fn plan_chunks(total: usize, chunk: usize, energy: &[f32]) -> Vec<(usize, usize)> {
-    if chunk == 0 {
-        return if total >= MIN_SEG {
-            vec![(0, total)]
-        } else {
-            Vec::new()
-        };
-    }
-    if total < chunk || total < MIN_SEG {
-        return Vec::new();
-    }
-    let n_chunks = total / chunk;
-    if n_chunks == 0 {
-        return Vec::new();
-    }
-    let o = best_offset(total, chunk, energy);
-    let mut chunks = Vec::with_capacity(n_chunks);
-    for k in 0..n_chunks {
-        let start = o + k * chunk;
-        let end = start + chunk;
-        if end <= total {
-            chunks.push((start, chunk));
-        }
+    let tail = total - s;
+    if tail >= MIN_SEG {
+        chunks.push((s, tail));
     }
     chunks
 }
@@ -154,35 +136,32 @@ mod tests {
     }
 
     #[test]
-    fn plan_chunks_basic_uniform() {
+    fn plan_chunks_uniform_energy_full_coverage() {
+        // energy đều: mỗi biên cắt ở mép trái window (leftmost min).
+        // total=1200, chunk=512, W=128:
+        //   cut1 = 512-128 = 384, cut2 = 896-128 = 768, tail = 432 ≥ MIN_SEG
         let total = 1200;
         let chunk = 512;
-        // energy đều → offset = 0
         let energy = vec![1.0; total];
         let chunks = plan_chunks(total, chunk, &energy);
-        // 1200 / 512 = 2 chunks full (1024), đuôi 176 bị bỏ
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0], (0, 512));
-        assert_eq!(chunks[1], (512, 512));
-        // mọi chunk đúng 512
-        for (_, len) in &chunks {
-            assert_eq!(*len, 512);
-        }
+        assert_eq!(chunks, vec![(0, 384), (384, 384), (768, 432)]);
+        // phủ kín nguyên câu, không bỏ frame nào
+        assert_eq!(chunks.iter().map(|(_, l)| l).sum::<usize>(), total);
+        // mọi chunk ≥ MIN_SEG
+        assert!(chunks.iter().all(|(_, l)| *l >= MIN_SEG));
     }
 
     #[test]
-    fn plan_chunks_offset_at_dip() {
+    fn plan_chunks_boundary_at_dip() {
+        // có dip ở frame 500 → biên thứ nhất phải rơi đúng 500
         let total = 1100;
         let chunk = 500;
-        // có dip ở frame 500 → offset nên chọn gần đó
         let energy = energy_with_dip_at(500, total);
         let chunks = plan_chunks(total, chunk, &energy);
-        // 1100 / 500 = 2 chunks (1000), đuôi 100 bỏ
-        assert_eq!(chunks.len(), 2);
-        // offset nên là 0 (gần dip 500 nhất trong grid [0, 250))
-        // vì dip ở 500 = 1*500 + 0, offset=0 cho cut tại 500
-        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks[0], (0, 500));
         assert_eq!(chunks[1].0, 500);
+        // phủ kín
+        assert_eq!(chunks.iter().map(|(_, l)| l).sum::<usize>(), total);
     }
 
     #[test]
@@ -195,10 +174,11 @@ mod tests {
     }
 
     #[test]
-    fn plan_chunks_total_less_than_chunk_is_empty() {
+    fn plan_chunks_total_less_than_chunk_is_full() {
         let energy = vec![1.0; 200];
         let chunks = plan_chunks(200, 512, &energy);
-        assert!(chunks.is_empty());
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], (0, 200));
     }
 
     #[test]
@@ -209,15 +189,36 @@ mod tests {
     }
 
     #[test]
-    fn best_offset_tie_chooses_smaller() {
-        // 2 offset cho sum bằng nhau → chọn offset nhỏ hơn
-        let total = 1000;
-        let chunk = 500;
-        // energy đều 1.0 → mọi offset sum = n_chunks-1 = 1.0
+    fn plan_chunks_tail_kept_when_over_min_seg() {
+        // total = 1400, chunk = 512, W = 128, energy đều → cuts tại 384, 768, 1152;
+        // tail (1152, 248) ≥ MIN_SEG → giữ, phủ kín nguyên câu.
+        let total = 1400;
+        let chunk = 512;
         let energy = vec![1.0; total];
         let chunks = plan_chunks(total, chunk, &energy);
-        // offset = 0
-        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks, vec![(0, 384), (384, 384), (768, 384), (1152, 248)]);
+        assert_eq!(chunks.iter().map(|(_, l)| l).sum::<usize>(), total);
+    }
+
+    #[test]
+    fn plan_chunks_tail_dropped_below_min_seg() {
+        // total = 70 < chunk + w: cắt tại 48, đuôi 22 < MIN_SEG(32) → bị bỏ.
+        let total = 70;
+        let chunk = 64;
+        let energy = vec![1.0; total];
+        let chunks = plan_chunks(total, chunk, &energy);
+        assert_eq!(chunks, vec![(0, 48)]);
+    }
+
+    #[test]
+    fn plan_chunks_tie_picks_leftmost() {
+        // energy đều → min xuất hiện khắp window → cắt tại mép trái window
+        let total = 1000;
+        let chunk = 500;
+        let energy = vec![1.0; total];
+        let chunks = plan_chunks(total, chunk, &energy);
+        // cut1 = 500 - 125 = 375
+        assert_eq!(chunks[0].1, 375);
     }
 
     #[test]

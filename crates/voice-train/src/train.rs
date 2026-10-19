@@ -31,8 +31,11 @@ pub struct TrainConfig {
     pub out_dir: PathBuf,
     /// Số frame latent mỗi chunk (mỗi sample = 1 chunk). `0` = không chunk (backward compat, không khuyến khích).
     pub chunk_frames: usize,
-    /// Số chunk mỗi bước (batch size).
+    /// Số chunk mỗi micro-batch (batch size thật tương ứng memory).
     pub batch: usize,
+    /// Cộng dồn gradient qua N micro-batch trước 1 optimizer step.
+    /// Effective batch = `batch × grad_accum`; memory chỉ theo `batch` một mình.
+    pub grad_accum: usize,
     pub steps: usize,
     pub lr: f64,
     /// Cứ bao nhiêu bước đo val một lần.
@@ -108,9 +111,7 @@ pub fn run_training(
     let per_spk_chunks = train_ds.per_speaker_chunks.clone();
 
     let device = device.clone().autodiff();
-    let device_eval = Device::flex(); // CPU (Flex) — eval luôn tách khỏi GPU, tránh OOM CUDA khi train --device cuda
     let mut gen = Generator::load(&cfg.dec_dir, &device)?.freeze();
-    let gen_eval = Generator::load(&cfg.dec_dir, &device_eval)?.freeze();
 
     // NSF-lite: unfreeze conv_src (chỉ có khi bundle có conv_src.npy).
     if cfg.nsf {
@@ -156,15 +157,18 @@ pub fn run_training(
         train_ds.chunks.len(),
         val_ds.chunks.len()
     );
+    // grad accumulation: 1 optimizer step = `accum` micro-batch cộng dồn gradient.
+    let accum = cfg.grad_accum.max(1);
     println!(
-        "chunk {chunk_frames} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {} · {} giọng/bước",
+        "chunk {chunk_frames} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {}×accum {} (effective {}) · {} giọng/bước",
         cfg.batch,
+        accum,
+        cfg.batch * accum,
         active.len()
     );
 
     let mel_cfg = MelConfig::ljs();
     let basis = mel::mel_basis(&mel_cfg, &device);
-    let basis_eval = mel::mel_basis(&mel_cfg, &device_eval);
 
     let mut optim = AdamConfig::new().init();
     let mut rng = Rng::new(cfg.seed);
@@ -188,64 +192,100 @@ pub fn run_training(
     };
 
     for step in 0..cfg.steps {
-        let mut feats_host: Vec<f32> = Vec::with_capacity(cfg.batch * c * t_h_seg);
-        let mut wav_host: Vec<f32> = Vec::with_capacity(cfg.batch * n);
-        let mut f0_host: Vec<f32> = vec![0.0f32; cfg.batch * chunk_frames];
+        // ---- Mỗi optimizer step = `accum` micro-batch cộng dồn gradient.
+        // Memory chỉ theo `batch` (1 micro-batch), effective batch = batch × accum.
+        let mut cum = GradientsParams::new();
+        let mut lv_sum = 0f64;
 
-        for i in 0..cfg.batch {
-            // Round-robin theo giọng → batch cân bằng bất kể số chunk mỗi giọng.
-            let spk = active[cursor % active.len()];
-            cursor = (cursor + 1) % active.len();
-            let list = &per_spk_chunks[spk];
-            let k = list[rng.below(list.len())];
-            let chunk = &train_ds.chunks[k];
+        for _micro in 0..accum {
+            // ---- Xếp micro-batch. Chunk có độ dài biến động (plan_chunks Applio:
+            // ± chunk/4) → pad 0 về chuẩn `chunk_frames` + mask frame bù loss.
+            let mut feats_host: Vec<f32> = vec![0.0f32; cfg.batch * c * t_h_seg];
+            let mut wav_host: Vec<f32> = vec![0.0f32; cfg.batch * n];
+            let mut f0_host: Vec<f32> = vec![0.0f32; cfg.batch * chunk_frames];
+            let mut real_latents: Vec<usize> = vec![0; cfg.batch]; // len thật từng sample
 
-            // Chunk đã có độ dài chuẩn = chunk_frames (đuôi đã bị bỏ ở load)
-            // Sample = nguyên chunk, không crop ngẫu nhiên.
-            feats_host.extend_from_slice(&train_ds.chunk_feats_channel_major(k, chunk_frames));
-            let (wav_seg, _) = train_ds.segment_wav(k, 0, chunk_frames);
-            wav_host.extend_from_slice(&wav_seg);
+            for i in 0..cfg.batch {
+                // Round-robin theo giọng → batch cân bằng bất kể số chunk mỗi giọng.
+                let spk = active[cursor % active.len()];
+                cursor = (cursor + 1) % active.len();
+                let list = &per_spk_chunks[spk];
+                let k = list[rng.below(list.len())];
+                let chunk = &train_ds.chunks[k];
+                let t_chunk = train_ds.latent_len(k).min(chunk_frames);
+                real_latents[i] = t_chunk;
 
-            // f0 của chunk này, resample từ 100 Hz (RMVPE) về frame latent (86.13 Hz)
-            if cfg.nsf {
-                let f0 = train_ds.utts[chunk.utt].f0.as_ref().expect("f0 đã kiểm ở trên");
-                // f0 offset tương ứng offset_lat của chunk
-                let f0_start = ((chunk.offset_lat as f64 * 100.0 / LATENT_HZ).round() as usize).min(f0.len().saturating_sub(1));
-                let f0_chunk_len = chunk_frames; // f0 frames ≈ latent frames (tỷ lệ gần 1:1)
-                let f0_end = (f0_start + f0_chunk_len).min(f0.len());
-                let f0_slice = &f0[f0_start..f0_end];
-                // nearest_index_map resample f0_slice (100Hz) → chunk_frames (86.13Hz)
-                let map = nearest_index_map(f0_slice.len(), chunk_frames);
-                for t in 0..chunk_frames {
-                    f0_host[i * chunk_frames + t] = f0_slice[map[t]];
+                // feats slice phần thật rồi pad 0 về t_h_seg.
+                let f = train_ds.chunk_feats_channel_major(k, t_chunk);
+                debug_assert!(
+                    f.len() <= cfg.batch * c * t_h_seg,
+                    "chunk feats vượt chuẩn pad"
+                );
+                feats_host[i * c * t_h_seg..i * c * t_h_seg + f.len()].copy_from_slice(&f);
+                // wav đã tự pad 0 về `n` trong segment_wav.
+                let (wav_seg, _) = train_ds.segment_wav(k, 0, chunk_frames);
+                wav_host[i * n..(i + 1) * n].copy_from_slice(&wav_seg);
+
+                // f0 của chunk này, resample từ 100 Hz (RMVPE) về frame latent (86.13 Hz)
+                if cfg.nsf {
+                    let f0 = train_ds.utts[chunk.utt].f0.as_ref().expect("f0 đã kiểm ở trên");
+                    // f0 offset tương ứng offset_lat của chunk
+                    let f0_start = ((chunk.offset_lat as f64 * 100.0 / LATENT_HZ).round() as usize)
+                        .min(f0.len().saturating_sub(1));
+                    let f0_end = (f0_start + t_chunk).min(f0.len());
+                    let f0_slice = &f0[f0_start..f0_end];
+                    // nearest_index_map resample f0_slice (100Hz) → chunk_frames (86.13Hz)
+                    let map = nearest_index_map(f0_slice.len(), t_chunk);
+                    for t in 0..t_chunk {
+                        f0_host[i * chunk_frames + t] = f0_slice[map[t]];
+                    }
                 }
             }
+
+            let b = cfg.batch;
+            let feats = Tensor::<3>::from_data(TensorData::new(feats_host, [b, c, t_h_seg]), &device);
+            let target = Tensor::<2>::from_data(TensorData::new(wav_host, [b, n]), &device);
+            let f0_tensor = if cfg.nsf {
+                Some(Tensor::<2>::from_data(
+                    TensorData::new(f0_host, [b, chunk_frames]),
+                    &device,
+                ))
+            } else {
+                None
+            };
+
+            // Mask frame mel: 1 khi window STFT của frame nằm hoàn toàn trong vùng thật
+            // (t·hop + n_fft/2 ≤ real_samples) — loại nhiễu méo từ vùng pad 0.
+            let hop = mel_cfg.hop_length as usize;
+            let n_fft_half = (mel_cfg.n_fft as usize) / 2;
+            let mask_frames = n / hop + 1;
+            let mut mask_host = vec![0.0f32; b * mask_frames];
+            for i in 0..b {
+                let real_samples = real_latents[i] * SAMPLES_PER_FRAME;
+                for t in 0..mask_frames {
+                    if t * hop + n_fft_half <= real_samples {
+                        mask_host[i * mask_frames + t] = 1.0;
+                    }
+                }
+            }
+
+            let z = adapter.forward_to(feats, chunk_frames);
+            let wav = gen.forward(z, f0_tensor, false).reshape([b, n]);
+            let mask = Tensor::<2>::from_data(TensorData::new(mask_host, [b, mask_frames]), &device);
+            let loss = mel::mel_l1_masked(wav, target, &mel_cfg, &basis, &mask);
+
+            lv_sum += loss.clone().into_scalar::<f32>() as f64;
+            let mut grads = GradientsParams::from_grads(loss.backward(), &adapter);
+            // Cộng dồn gradients micro-batch vào `cum` (theo param id).
+            merge_into(&mut cum, &mut grads, &adapter);
         }
-
-        let b = cfg.batch;
-        let feats = Tensor::<3>::from_data(TensorData::new(feats_host, [b, c, t_h_seg]), &device);
-        let target = Tensor::<2>::from_data(TensorData::new(wav_host, [b, n]), &device);
-        let f0_tensor = if cfg.nsf {
-            Some(Tensor::<2>::from_data(
-                TensorData::new(f0_host, [b, chunk_frames]),
-                &device,
-            ))
-        } else {
-            None
-        };
-
-        let z = adapter.forward_to(feats, chunk_frames);
-        let wav = gen.forward(z, f0_tensor, false).reshape([b, n]);
-        let loss = mel::mel_l1(wav, target, &mel_cfg, &basis);
-
-        let lv: f64 = loss.clone().into_scalar::<f32>() as f64;
+        let lv = lv_sum / accum as f64;
         if step == 0 {
             first = lv;
         }
         last = lv;
 
-        let grads = GradientsParams::from_grads(loss.backward(), &adapter);
-        adapter = optim.step(cfg.lr, adapter, grads);
+        adapter = optim.step(cfg.lr, adapter, cum);
 
         if let Some(path) = &checkpoint_path {
             if (step + 1) % cfg.checkpoint_every == 0 {
@@ -257,24 +297,24 @@ pub fn run_training(
         let do_val =
             cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
-            // Snapshot adapter sang CPU cho eval (tách khỏi autodiff state).
-            let adapter_eval = adapter.clone().to_device(&device_eval);
-            let report = eval::evaluate(&adapter_eval, &gen_eval, val_ds, &mel_cfg, &basis_eval, &device_eval, &device_eval)?;
+            // Cùng device với train — module tự do Grad tracking khi forward không require_grad.
+            let report = eval::evaluate(&adapter, &gen, val_ds, &mel_cfg, &basis, &device, &device)?;
             let improved = report.mean_mel_l1 < best_val;
             if improved {
                 best_val = report.mean_mel_l1;
                 best_adapter = adapter.clone();
             }
             println!(
-                "step {:>4}  train mel-L1 = {lv:.5}  val = {:.5}{}",
+                "step {:>4}  train mel-L1 = {lv:.5}  val = {:.5}{}{}",
                 step + 1,
                 report.mean_mel_l1,
-                if improved { "  ← tốt nhất" } else { "" }
+                if improved { "  ← tốt nhất" } else { "" },
+                mem_line()
             );
             Some(report.mean_mel_l1)
         } else {
             if step % 25 == 0 || step + 1 == cfg.steps {
-                println!("step {:>4}  train mel-L1 = {lv:.5}", step + 1);
+                println!("step {:>4}  train mel-L1 = {lv:.5}{}", step + 1, mem_line());
             }
             None
         };
@@ -298,6 +338,67 @@ pub fn run_training(
         history_path,
         checkpoint_path,
     })
+}
+
+/// Cộng dồn gradients của micro-batch sau vào accumulator (`GradientsParams`
+/// Burn 0.22 không có `merge` — cộng tay theo param id: rank 2 (weight) và
+/// rank 1 (bias) của `Adapter`).
+fn merge_into(cum: &mut GradientsParams, gp: &mut GradientsParams, adapter: &Adapter) {
+    let (w_id, b_id) = adapter.param_ids();
+    add_grad::<2>(cum, gp, w_id);
+    if let Some(b) = b_id {
+        add_grad::<1>(cum, gp, b);
+    }
+}
+
+fn add_grad<const R: usize>(
+    cum: &mut GradientsParams,
+    gp: &mut GradientsParams,
+    id: burn::module::ParamId,
+) {
+    match (cum.remove::<R>(id), gp.remove::<R>(id)) {
+        (Some(a), Some(b)) => cum.register(id, a + b),
+        (None, Some(b)) => cum.register(id, b),
+        (Some(a), None) => cum.register(id, a),
+        (None, None) => {}
+    }
+}
+
+/// RSS + peak (VmHWM) của process tính GB, đọc `/proc/self/status`.
+/// Trả None trên nền tảng không-Linux (macOS) → dòng mem bị bỏ qua.
+#[cfg(target_os = "linux")]
+fn rss_peak_gb() -> Option<(f64, f64)> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    let mut rss = None;
+    let mut hwm = None;
+    for line in s.lines() {
+        let parse = |v: &str| -> Option<f64> {
+            v.split_whitespace()
+                .next()?
+                .parse::<f64>()
+                .ok()
+                .map(|kb| kb / 1024.0 / 1024.0)
+        };
+        if let Some(v) = line.strip_prefix("VmRSS:") {
+            rss = parse(v);
+        } else if let Some(v) = line.strip_prefix("VmHWM:") {
+            hwm = parse(v);
+        }
+    }
+    Some((rss?, hwm?))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rss_peak_gb() -> Option<(f64, f64)> {
+    None
+}
+
+/// ` · RSS=x.xGB PEAK=x.xGB` (chỉ Linux; Colab chạy Linux nên luôn có).
+fn mem_line() -> String {
+    match rss_peak_gb() {
+        Some((rss, hwm)) => format!(" · RSS={rss:.1}GB PEAK={hwm:.1}GB"),
+        None => String::new(),
+    }
 }
 
 /// Ghi lịch sử huấn luyện (ghi lại toàn bộ mỗi lần gọi — đủ nhỏ để đơn giản).
@@ -404,6 +505,7 @@ mod tests {
             out_dir: std::env::temp_dir().join("voice_rs_chunk_test_train"),
             chunk_frames: 0,
             batch: 2,
+            grad_accum: 1,
             steps: 5,
             lr: 1e-3,
             val_every: 5,

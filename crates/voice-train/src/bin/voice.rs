@@ -161,9 +161,12 @@ struct TrainArgs {
     /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
     #[arg(long, default_value_t = 512)]
     chunk_frames: usize,
-    /// Số chunk mỗi bước.
+    /// Số chunk mỗi micro-batch (memory thực tế; effective batch = batch × grad-accum).
     #[arg(long, default_value_t = 8)]
     batch: usize,
+    /// Cộng dồn gradient qua N micro-batch trước 1 optimizer step (1 = tắt).
+    #[arg(long, default_value_t = 1)]
+    grad_accum: usize,
     #[arg(long, default_value_t = 500)]
     steps: usize,
     #[arg(long, default_value_t = 1e-3)]
@@ -415,6 +418,7 @@ fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         out_dir: a.out_dir,
         chunk_frames: a.chunk_frames,
         batch: a.batch,
+        grad_accum: a.grad_accum,
         steps: a.steps,
         lr: a.lr,
         val_every: a.val_every,

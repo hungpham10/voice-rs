@@ -1331,9 +1331,30 @@ biên cắt dời về **điểm năng lượng cực tiểu** (energy minima) t
 mỗi chunk đủ context cho `dec`, nhưng peak memory chỉ phụ thuộc **1 chunk + context**
 (~150–300 MB), **độc lập độ dài file**.
 
+Từ v2.2.18, `plan_chunks` cắt theo **Applio chuẩn**: mỗi biên tự tìm **energy min**
+trong cửa sổ ±chunk/4 quanh mốc nominal (câu nói nghỉ tự nhiên → mép nối vô hình),
+tie → cắt sớm nhất. Câu < `chunk_frames` giữ nguyên 1 chunk; đuôi ≥ `frame` MIN_SEG
+(32) được giữ. Độ dài chunk **biến động ±chunk/4** → train pad 0 về `chunk_frames`
+với **mask frame mel** (frame thực = `t·hop + n_fft/2 ≤ real_samples`) loại nhiễu mép
+STFT khỏi loss.
+
+**Grad accumulation** (`--grad-accum N`, mặc định 1): 1 optimizer step = cộng dồn
+gradient qua N micro-batch → effective batch = `batch × N` nhưng **memory chỉ theo
+`batch`** (graph backward ≈ 5 GB/sample ở 512 frame ⇒ batch 8 = 40 GB nếu không accum).
+Burn 0.22 `GradientsParams` không có `merge` — cộng tay theo param id (weight rank 2,
+bias rank 1).
+
+**Single device (v2.2.18):** train + eval dùng chung một device (`Adapter::valid()`
+mode cho forward eval); bỏ path `device_eval` Flex CPU riêng của v2.2.16/17.
+
+**Log memory** (Linux): mỗi bước val/25 bước in `· RSS=x.xGB PEAK=x.xGB` (đọc
+`/proc/self/status`: `VmRSS`, `VmHWM` — peak lịch sử của process) → chẩn đoán OOM
+không còn đoán mò.
+
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
 | `--chunk-frames` | `512` | Số frame latent mỗi chunk (0 = không chunk, fallback cũ) |
+| `--grad-accum` | `1` | Cộng dồn gradient qua N micro-batch (effective batch = batch × N) |
 | `--ctx-frames` | `32` | Context ± mỗi bên khi gen chunk (trim sau) |
 | `--skip-silence` | `false` | Bỏ qua chunk im lặng (RMS < −45 dBFS) → copy zeros |
 

@@ -72,6 +72,15 @@ impl Adapter {
         self.linear.weight.val().dims()[0]
     }
 
+    /// Param id của weight `[out, in]` (rank 2) và bias `[out]` (rank 1) —
+    /// dùng cho grad accumulation ngoài module.
+    pub fn param_ids(&self) -> (burn::module::ParamId, Option<burn::module::ParamId>) {
+        (
+            self.linear.weight.id,
+            self.linear.bias.as_ref().map(|b| b.id),
+        )
+    }
+
     pub fn out_dim(&self) -> usize {
         self.linear.weight.val().dims()[1]
     }
