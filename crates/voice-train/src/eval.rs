@@ -92,7 +92,8 @@ pub fn per_utt_metrics(
         let target = Tensor::<2>::from_data(TensorData::new(target_host, [1, n]), device_eval);
 
         let lv: f64 = mel::mel_l1(wav.clone(), target, cfg, basis)
-            .into_scalar::<f32>() as f64;
+            .try_into_scalar::<f32>()
+            .map_err(|e| format!("chunk {k} mel_l1 đọc scalar lỗi: {e}"))? as f64;
 
         let vals = wav.into_data().as_slice::<f32>()?.to_vec();
         let finite = vals.iter().all(|v| v.is_finite());
