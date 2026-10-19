@@ -1317,6 +1317,45 @@ sửa, `dec(random N(0,1) z)` cho RMS `2.16e-2` (mức tiếng nói) và loss gi
 Đây là loại lỗi **im lặng** mà `verify_dec` một mình không bắt được — phải kiểm
 **tính chất vật lý** của đầu ra (biên độ), không chỉ "khớp PyTorch".
 
+#### 13.6.5 Streaming chunking — sinh file dài, memory bounded (v2.2.17+)
+
+Từ v2.2.17, `voice` hỗ trợ **chunking streaming** kiểu Applio cho cả train/eval/generate:
+
+**Vấn đề:** HiFi-GAN decoder (`dec`) có ~200 lớp conv, upsample 256×, giữ 512 kênh
+đến cuối stack. Forward nguyên câu 20 s → tensor trung gian giai đoạn cao nhất
+≈ `441k samples × 512 kênh × 4 B ≈ 900 MB`; cả stack giữ vài GB → **OOM** trên
+cả CPU RAM (Killed) lẫn GPU VRAM.
+
+**Giải pháp:** chia câu thành các chunk ≤ `chunk_frames` (mặc định 512 frame ≈ 5.9 s),
+biên cắt dời về **điểm năng lượng cực tiểu** (energy minima) trên lưới 0.5 s →
+mỗi chunk đủ context cho `dec`, nhưng peak memory chỉ phụ thuộc **1 chunk + context**
+(~150–300 MB), **độc lập độ dài file**.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `--chunk-frames` | `512` | Số frame latent mỗi chunk (0 = không chunk, fallback cũ) |
+| `--ctx-frames` | `32` | Context ± mỗi bên khi gen chunk (trim sau) |
+| `--skip-silence` | `false` | Bỏ qua chunk im lặng (RMS < −45 dBFS) → copy zeros |
+
+**Train (`voice train`):** mỗi sample = 1 chunk nguyên (không crop ngẫu nhiên).
+Dataset load tự động explode câu dài thành nhiều chunk (`utt_id#0`, `utt_id#1`…),
+chia sẻ file `.npy`/`f0.npy` gốc (không re-embed). Batch uniform tự nhiên vì mọi
+chunk có độ dài bằng nhau (đuôi < chunk_frames bị bỏ). Thay thế hoàn toàn cơ chế
+`--seg` cũ (crop ngẫu nhiên bị chặn về câu ngắn nhất).
+
+**Eval (`voice validate`):** lặp từng chunk, mel-L1 trung bình per-chunk (có trọng
+số bằng nhau vì chunk đều dài) — không bao giờ forward nguyên câu dài.
+
+**Generate (`voice generate`):** mặc định full câu, nhưng **nội bộ tự động chunk +
+ghép** như Applio offline:
+1. `plan_chunks`: tìm điểm cắt ở energy minima (deterministic)
+2. Mỗi chunk: slice feats ±`ctx_frames` → adapter → dec → wav
+3. **Trim context** (bỏ phần overlap) → butt-join
+4. Peak normalize 0.99 (như Applio)
+5. `--max-frames N` chỉ là giới hạn output length, không phải chống OOM
+
+Memory peak = 1 chunk + context ≈ **hằng số**, 10 phút hay 2 tiếng như nhau.
+
 #### 13.6.3 🔶 Hai pha huấn luyện — bridge nội dung dùng chung + timbre riêng
 
 **Vấn đề của P1 hiện tại.** `Adapter` = `Linear(768→192)` gánh **cả** bridge nội
@@ -1534,13 +1573,14 @@ Python mà quên Rust thì CI bắt ngay.
 - **Batch cân bằng theo speaker** (con trỏ round-robin): mỗi batch lấy đều các giọng
   → gradient về bridge là trung bình → đây chính là cơ chế "quên timbre" của Pha A
   (§13.6.3).
-- `--seg` cắt đoạn ngẫu nhiên (tự co theo câu ngắn nhất để batch đều kích thước);
-  loss `L1(mel_gen, mel_target)` trung bình batch; Adam.
+- **Chunking streaming** (§13.6.5): dataset load tự động cắt câu dài thành chunks
+  ≤ `--chunk-frames` (mặc định 512 frame ≈ 5.9 s), biên ở energy minima.
+  Mỗi sample = 1 chunk nguyên (không crop ngẫu nhiên). Batch uniform tự nhiên.
 - **Validate** mỗi `--val-every` bước trên `val.csv`; ghi `history.csv`
   (`step,train_mel_l1,val_mel_l1`), `adapter_best.bpk` (theo val) và `adapter.bpk`
   (cuối). Seed cố định (`--seed`, mặc định 42); RNG nội bộ xorshift (không thêm
   dependency).
-- Cờ: `--train-manifest --val-manifest --dec-dir --out-dir --seg --batch --steps
+- Cờ: `--train-manifest --val-manifest --dec-dir --out-dir --chunk-frames --batch --steps
   --lr --val-every --seed --device`.
 
 ##### g) `eval` — gate chất lượng (kiểu integration-test / benchmark)
@@ -2478,7 +2518,7 @@ lúc chạy).
 | `scripts/fetch_assets.sh [tag]` | tải `voice-assets.tar.gz`, giải nén → `sources/`, verify `SHA256SUMS`. |
 | `scripts/fetch_assets.sh --f0 [tag]` | thêm `f0-assets.tar.gz` (`rmvpe_f0.onnx`). |
 | `scripts/fetch_bin.sh [tag]` | tải binary đã build (`voice`) → `./bin/`, verify qua GitHub Release. |
-| `scripts/run_training.sh` | `DATA=data/vivos ./scripts/run_training.sh` — đường huấn luyện duy nhất: `voice embed` → `voice train` → `voice validate` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). |
+| `scripts/run_training.sh` | `DATA=data/vivos ./scripts/run_training.sh` — đường huấn luyện duy nhất: `voice embed` → `voice train` → `voice validate` (gate PASS/FAIL); ưu tiên `./bin/`, thiếu thì `cargo run` (§13.6.4). Biến `CHUNK` (mặc định 512) thay `SEG` cũ (deprecated). |
 | `scripts/data/*.py` | công cụ dev chuẩn hoá + chia dataset → CSV cho Rust đọc (§13.6.4c). |
 
 ### 16.4 Notebook `notebooks/colab_train.ipynb`
@@ -2501,11 +2541,11 @@ Colab free ~2 core; laptop dev ~10 core với `dec` forward+backward ở 589 fra
 
 | Cấu hình | Thời gian/bước | 250 bước |
 |---|---|---|
-| `SEG=86` (1 s, 86 frame) | ~20–30 s | ~1.5–2 h |
-| `SEG=589` (cả câu) | ~2–3 phút | ~8–12 h |
+| `CHUNK=512` (5.9 s) | ~20–30 s | ~1.5–2 h |
+| `CHUNK=0` (cả câu, fallback) | ~2–3 phút | ~8–12 h |
 
-→ Notebook mặc định `SEG=86 STEPS=250`. Muốn nhanh hơn đáng kể phải làm đường GPU
-(`burn-cuda`) — công việc riêng, chưa nằm trong phạm vi này.
+→ Notebook mặc định `CHUNK=512 STEPS=250`. Memory bounded nhờ chunking streaming (§13.6.5).
+Muốn nhanh hơn đáng kể phải làm đường GPU (`burn-cuda`) — công việc riêng, chưa nằm trong phạm vi này.
 
 ### 16.6 ✅ Chuẩn bị dữ liệu — Python (dev), không phải runtime
 

@@ -1,8 +1,9 @@
 //! `voice train` — Luồng 1: cầu nối nội dung nhiều giọng (§13.6.4f).
 //!
 //! Chỉ `Adapter` (`Linear(768→192)`) học; `dec` **đóng băng**. Mỗi bước lấy một
-//! batch **cân bằng theo giọng** (round-robin), mỗi giọng một câu ngẫu nhiên, cắt
-//! một đoạn latent ngẫu nhiên. Loss = `L1` log-mel ở 22.05 kHz.
+//! batch **cân bằng theo giọng** (round-robin), mỗi giọng một **chunk** ngẫu nhiên
+//! (chunk = đoạn ≤ chunk_frames frame latent, cắt ở vùng yên).
+//! Loss = `L1` log-mel ở 22.05 kHz.
 //!
 //! Mọi nguồn ngẫu nhiên đi qua [`Rng`] với seed cố định (không dùng `rand` để
 //! không thêm phụ thuộc và để seed tái lập được trên mọi nền tảng).
@@ -16,7 +17,7 @@ use voice_lib::vc::{Adapter, nearest_index_map};
 use voice_mel::MelConfig;
 use voice_vits::dec::Generator;
 
-use crate::dataset::{Dataset, Rng, HUBERT_HZ, LATENT_HZ, SAMPLES_PER_FRAME};
+use crate::dataset::{Dataset, Rng, LATENT_HZ, SAMPLES_PER_FRAME};
 use crate::{eval, mel};
 
 /// Đáy đoạn huấn luyện (frame latent). STFT `n_fft=1024, center=true` cần tín hiệu
@@ -28,9 +29,9 @@ const MIN_SEG: usize = 32;
 pub struct TrainConfig {
     pub dec_dir: PathBuf,
     pub out_dir: PathBuf,
-    /// Số frame latent mỗi mẫu (tự co theo câu ngắn nhất).
-    pub seg: usize,
-    /// Số câu mỗi bước.
+    /// Số frame latent mỗi chunk (mỗi sample = 1 chunk). `0` = không chunk (backward compat, không khuyến khích).
+    pub chunk_frames: usize,
+    /// Số chunk mỗi bước (batch size).
     pub batch: usize,
     pub steps: usize,
     pub lr: f64,
@@ -50,7 +51,7 @@ pub struct TrainingSummary {
     pub first: f64,
     pub last: f64,
     pub best_val: f64,
-    pub seg: usize,
+    pub chunk_frames: usize,
     pub batch: usize,
     pub params: usize,
     pub adapter_path: PathBuf,
@@ -69,67 +70,42 @@ pub fn run_training(
 ) -> Result<TrainingSummary, Box<dyn std::error::Error>> {
     let c = train_ds.check_dims()?;
     val_ds.check_dims()?;
-    if val_ds.utts.is_empty() {
-        return Err("val rỗng — cần ít nhất một câu để đo".into());
+    if val_ds.chunks.is_empty() {
+        return Err("val rỗng — cần ít nhất một chunk để đo".into());
     }
     let nspk = train_ds.num_speakers();
     if nspk == 0 {
         return Err("train rỗng".into());
     }
 
-    // `seg` hiệu dụng: không vượt câu ngắn nhất (để batch đều kích thước).
-    let min_latent = (0..train_ds.utts.len())
-        .map(|u| train_ds.latent_len(u))
-        .min()
-        .unwrap_or(1)
-        .max(1);
-    let seg = if cfg.seg == 0 {
-        // Cả câu: lấy dài nhất có thể theo câu ngắn nhất, nhưng không dưới đáy MIN_SEG.
-        min_latent.max(MIN_SEG)
+    // Validate chunk_frames
+    let chunk_frames = if cfg.chunk_frames == 0 {
+        // Backward compat: không chunk, dùng min_latent logic cũ (không khuyến khích)
+        eprintln!("⚠️  chunk_frames=0 (backward compat): sẽ dùng min_latent logic cũ");
+        // Fallback: compute min latent across utterances
+        (0..train_ds.utts.len())
+            .map(|u| train_ds.latent_len(u))
+            .min()
+            .unwrap_or(1)
+            .max(MIN_SEG)
     } else {
-        cfg.seg.max(MIN_SEG).min(min_latent)
+        if cfg.chunk_frames < MIN_SEG {
+            return Err(format!("chunk_frames ({}) phải ≥ MIN_SEG ({})", cfg.chunk_frames, MIN_SEG).into());
+        }
+        cfg.chunk_frames
     };
-    let t_h_seg = Dataset::hubert_frames_for(seg);
-    let n = seg * SAMPLES_PER_FRAME;
 
-    // Lọc các câu quá ngắn (< seg frame latent hoặc < t_h_seg frame HuBERT) ra khỏi
-    // lấy mẫu để tránh underflow / crash STFT trên STFT reflect-pad.
-    let ineligible: Vec<usize> = (0..train_ds.utts.len())
-        .filter(|&u| {
-            let lat = train_ds.latent_len(u);
-            let t_h = train_ds.utts[u].t_h;
-            lat < seg || t_h < t_h_seg
-        })
-        .collect();
-    let ineligible_cnt = ineligible.len();
-    if ineligible_cnt > 0 {
-        println!(
-            "⚠️  bỏ {ineligible_cnt} câu quá ngắn (< {seg} frame latent) để tránh crash STFT"
-        );
-    }
-    let active: Vec<usize> = (0..train_ds.num_speakers())
-        .filter(|&s| {
-            train_ds.per_speaker[s]
-                .iter()
-                .any(|&u| !ineligible.contains(&u))
-        })
+    let t_h_seg = Dataset::hubert_frames_for(chunk_frames);
+    let n = chunk_frames * SAMPLES_PER_FRAME;
+
+    // Active speakers = those with at least 1 chunk
+    let active: Vec<usize> = (0..nspk)
+        .filter(|&s| !train_ds.per_speaker_chunks[s].is_empty())
         .collect();
     if active.is_empty() {
-        return Err(format!(
-            "không còn câu đủ dài (≥ {seg} frame latent) để train — hãy giảm --seg hoặc bổ sung dữ liệu dài hơn"
-        )
-        .into());
+        return Err("không có giọng nào có chunk hợp lệ để train".into());
     }
-    let per_spk_active: Vec<Vec<usize>> = train_ds
-        .per_speaker
-        .iter()
-        .map(|list| {
-            list.iter()
-                .copied()
-                .filter(|&u| !ineligible.contains(&u))
-                .collect()
-        })
-        .collect();
+    let per_spk_chunks = train_ds.per_speaker_chunks.clone();
 
     let device = device.clone().autodiff();
     let device_eval = Device::flex(); // CPU (Flex) — eval luôn tách khỏi GPU, tránh OOM CUDA khi train --device cuda
@@ -151,14 +127,15 @@ pub fn run_training(
         gen.conv_src = Some(src);
     }
 
-    // Khi bật NSF, mọi câu phải kèm .f0.npy co-location.
+    // Khi bật NSF, mọi chunk phải kèm .f0.npy co-location (kiểm tra qua utterance gốc).
     if cfg.nsf {
         for ds in [train_ds, val_ds] {
-            for utt in &ds.utts {
+            for chunk in &ds.chunks {
+                let utt = &ds.utts[chunk.utt];
                 if utt.f0.is_none() {
                     return Err(format!(
-                        "voice train --nsf: câu {} thiếu features .f0.npy co-location",
-                        utt.utt_id
+                        "voice train --nsf: chunk {} (utt {}) thiếu features .f0.npy co-location",
+                        chunk.chunk_id, utt.utt_id
                     )
                     .into());
                 }
@@ -174,13 +151,13 @@ pub fn run_training(
         gen.num_params() as f64 / 1e6
     );
     println!(
-        "{} giọng · {} câu train · {} câu val",
+        "{} giọng · {} chunk train · {} chunk val",
         nspk,
-        train_ds.utts.len(),
-        val_ds.utts.len()
+        train_ds.chunks.len(),
+        val_ds.chunks.len()
     );
     println!(
-        "seg {seg} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {} · {} giọng/bước",
+        "chunk {chunk_frames} frame latent ({t_h_seg} frame HuBERT, {n} mẫu) · batch {} · {} giọng/bước",
         cfg.batch,
         active.len()
     );
@@ -202,7 +179,6 @@ pub fn run_training(
     let mut last = f64::NAN;
     let mut best_val = f64::INFINITY;
     let mut best_adapter = adapter.clone();
-    // (step, train_mel_l1, val_mel_l1) — val chỉ có ở bước đo.
     let mut history: Vec<(usize, f64, Option<f64>)> = Vec::with_capacity(cfg.steps);
 
     let checkpoint_path = if cfg.checkpoint_every > 0 {
@@ -214,33 +190,34 @@ pub fn run_training(
     for step in 0..cfg.steps {
         let mut feats_host: Vec<f32> = Vec::with_capacity(cfg.batch * c * t_h_seg);
         let mut wav_host: Vec<f32> = Vec::with_capacity(cfg.batch * n);
-        let mut f0_host: Vec<f32> = vec![0.0f32; cfg.batch * seg];
+        let mut f0_host: Vec<f32> = vec![0.0f32; cfg.batch * chunk_frames];
 
         for i in 0..cfg.batch {
-            // Round-robin theo giọng → batch cân bằng bất kể số câu mỗi giọng.
+            // Round-robin theo giọng → batch cân bằng bất kể số chunk mỗi giọng.
             let spk = active[cursor % active.len()];
             cursor = (cursor + 1) % active.len();
-            let list = &per_spk_active[spk];
-            let u = list[rng.below(list.len())];
-            let lat = train_ds.latent_len(u);
+            let list = &per_spk_chunks[spk];
+            let k = list[rng.below(list.len())];
+            let chunk = &train_ds.chunks[k];
 
-            let l0 = rng.below(lat - seg + 1);
-            let t_h = train_ds.utts[u].t_h;
-            let mut h0 = (l0 as f64 * HUBERT_HZ / LATENT_HZ).floor() as usize;
-            if h0 + t_h_seg > t_h {
-                h0 = t_h - t_h_seg;
-            }
-
-            feats_host.extend_from_slice(&train_ds.segment_feats_channel_major(u, h0, t_h_seg));
-            let (wav_seg, _) = train_ds.segment_wav(u, l0, seg);
+            // Chunk đã có độ dài chuẩn = chunk_frames (đuôi đã bị bỏ ở load)
+            // Sample = nguyên chunk, không crop ngẫu nhiên.
+            feats_host.extend_from_slice(&train_ds.chunk_feats_channel_major(k, chunk_frames));
+            let (wav_seg, _) = train_ds.segment_wav(k, 0, chunk_frames);
             wav_host.extend_from_slice(&wav_seg);
 
-            // f0 của câu này, resample từ 100 Hz (RMVPE) về seg frame latent (86.13 Hz)
+            // f0 của chunk này, resample từ 100 Hz (RMVPE) về frame latent (86.13 Hz)
             if cfg.nsf {
-                let f0 = train_ds.utts[u].f0.as_ref().expect("f0 đã kiểm ở trên");
-                let map = nearest_index_map(f0.len(), seg);
-                for t in 0..seg {
-                    f0_host[i * seg + t] = f0[map[t]];
+                let f0 = train_ds.utts[chunk.utt].f0.as_ref().expect("f0 đã kiểm ở trên");
+                // f0 offset tương ứng offset_lat của chunk
+                let f0_start = ((chunk.offset_lat as f64 * 100.0 / LATENT_HZ).round() as usize).min(f0.len().saturating_sub(1));
+                let f0_chunk_len = chunk_frames; // f0 frames ≈ latent frames (tỷ lệ gần 1:1)
+                let f0_end = (f0_start + f0_chunk_len).min(f0.len());
+                let f0_slice = &f0[f0_start..f0_end];
+                // nearest_index_map resample f0_slice (100Hz) → chunk_frames (86.13Hz)
+                let map = nearest_index_map(f0_slice.len(), chunk_frames);
+                for t in 0..chunk_frames {
+                    f0_host[i * chunk_frames + t] = f0_slice[map[t]];
                 }
             }
         }
@@ -250,14 +227,14 @@ pub fn run_training(
         let target = Tensor::<2>::from_data(TensorData::new(wav_host, [b, n]), &device);
         let f0_tensor = if cfg.nsf {
             Some(Tensor::<2>::from_data(
-                TensorData::new(f0_host, [b, seg]),
+                TensorData::new(f0_host, [b, chunk_frames]),
                 &device,
             ))
         } else {
             None
         };
 
-        let z = adapter.forward_to(feats, seg);
+        let z = adapter.forward_to(feats, chunk_frames);
         let wav = gen.forward(z, f0_tensor, false).reshape([b, n]);
         let loss = mel::mel_l1(wav, target, &mel_cfg, &basis);
 
@@ -280,7 +257,9 @@ pub fn run_training(
         let do_val =
             cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
-            let report = eval::evaluate(&adapter, &gen_eval, val_ds, &mel_cfg, &basis_eval, &device_eval, &device_eval)?;
+            // Snapshot adapter sang CPU cho eval (tách khỏi autodiff state).
+            let adapter_eval = adapter.clone().to_device(&device_eval);
+            let report = eval::evaluate(&adapter_eval, &gen_eval, val_ds, &mel_cfg, &basis_eval, &device_eval, &device_eval)?;
             let improved = report.mean_mel_l1 < best_val;
             if improved {
                 best_val = report.mean_mel_l1;
@@ -311,7 +290,7 @@ pub fn run_training(
         first,
         last,
         best_val,
-        seg,
+        chunk_frames,
         batch: cfg.batch,
         params,
         adapter_path,
@@ -341,7 +320,7 @@ fn write_history(
 mod tests {
     use super::*;
     use burn::tensor::Device;
-    use crate::dataset::{Dataset, Utterance};
+    use crate::dataset::{Chunk, Dataset, Utterance};
     use crate::eval::per_utt_metrics;
     use crate::mel;
     use voice_lib::vc::Adapter;
@@ -349,50 +328,81 @@ mod tests {
     use voice_vits::dec::Generator;
     use std::path::{Path, PathBuf};
 
-    fn make_utt(speaker: usize, utt_id: &str, t_h: usize) -> Utterance {
+    fn make_utt(speaker: usize, utt_id: &str, t_h: usize, latent_frames: usize) -> Utterance {
         Utterance {
             speaker,
             utt_id: utt_id.to_string(),
             t_h,
             c: 768,
             feats: vec![0.0f32; t_h * 768],
-            wav: vec![0.1f32; t_h * 256],
+            wav: vec![0.1f32; latent_frames * SAMPLES_PER_FRAME],
             f0: None,
         }
     }
 
-    fn make_ds() -> Dataset {
-        // Một câu cực ngắn (1 frame latent = 256 mẫu) — đây là trigger của bug STFT
-        // "signal length (256) must be > n_fft/2 (512)".
-        let mut utts = vec![make_utt(0, "short", 1)];
+    fn make_ds(chunk_frames: usize) -> Dataset {
+        // 1 câu ngắn (1 frame latent) sẽ bị bỏ khi chunk_frames > 1
+        // 5 câu dài (40 frame HuBERT ≈ 69 latent) → mỗi câu 1 chunk nếu chunk_frames <= 69
+        let mut utts = vec![make_utt(0, "short", 1, 1)];
         for i in 0..5usize {
-            utts.push(make_utt(0, format!("long{i}").as_str(), 40));
+            utts.push(make_utt(0, format!("long{i}").as_str(), 40, 69));
         }
         let mut per_speaker = vec![Vec::new(); 1];
         for (i, u) in utts.iter().enumerate() {
             per_speaker[u.speaker].push(i);
         }
+        // Build chunks for given chunk_frames
+        let mut chunks = Vec::new();
+        let mut per_speaker_chunks = vec![Vec::new(); 1];
+        for (u_idx, utt) in utts.iter().enumerate() {
+            let total = Dataset::latent_len_of_utt(utt);
+            if chunk_frames == 0 {
+                // Full utterance
+                let chunk = Chunk {
+                    utt: u_idx,
+                    offset_lat: 0,
+                    len_lat: total,
+                    chunk_id: format!("{}#0", utt.utt_id),
+                };
+                let cidx = chunks.len();
+                chunks.push(chunk);
+                per_speaker_chunks[0].push(cidx);
+            } else if total >= chunk_frames {
+                // 1 chunk per utterance (since total < 2*chunk_frames)
+                let chunk = Chunk {
+                    utt: u_idx,
+                    offset_lat: 0,
+                    len_lat: chunk_frames,
+                    chunk_id: format!("{}#0", utt.utt_id),
+                };
+                let cidx = chunks.len();
+                chunks.push(chunk);
+                per_speaker_chunks[0].push(cidx);
+            }
+        }
         Dataset {
             speakers: vec!["spk0".to_string()],
             utts,
             per_speaker,
+            chunks,
+            per_speaker_chunks,
         }
     }
 
     #[test]
-    fn seg_zero_does_not_panic_on_short_utterance() {
+    fn chunk_frames_zero_does_not_panic_on_short_utterance() {
         if !Path::new("sources/vits_ljs_dec/config.json").exists() {
             eprintln!("skip: sources/vits_ljs_dec thiếu");
             return;
         }
         let device = Device::flex();
-        let train_ds = make_ds();
-        let val_ds = make_ds();
+        let train_ds = make_ds(0);
+        let val_ds = make_ds(0);
 
         let cfg = TrainConfig {
             dec_dir: PathBuf::from("sources/vits_ljs_dec"),
-            out_dir: std::env::temp_dir().join("voice_rs_seg_test_train"),
-            seg: 0,
+            out_dir: std::env::temp_dir().join("voice_rs_chunk_test_train"),
+            chunk_frames: 0,
             batch: 2,
             steps: 5,
             lr: 1e-3,
@@ -404,17 +414,18 @@ mod tests {
         let summary = run_training(&train_ds, &val_ds, &cfg, &device).expect("train không panic");
         assert!(summary.first.is_finite());
         assert!(summary.last.is_finite());
-        assert_eq!(summary.seg, MIN_SEG, "seg=0 với câu 1-frame phải bám đáy MIN_SEG");
+        assert_eq!(summary.chunk_frames, MIN_SEG, "chunk_frames=0 fallback phải bám đáy MIN_SEG");
     }
 
     #[test]
-    fn eval_skips_short_utterances() {
+    fn eval_chunks_work() {
         if !Path::new("sources/vits_ljs_dec/config.json").exists() {
             eprintln!("skip: sources/vits_ljs_dec thiếu");
             return;
         }
         let device = Device::flex();
-        let ds = make_ds();
+        let ds = make_ds(64); // chunk_frames=64
+
         let gen = Generator::load(&PathBuf::from("sources/vits_ljs_dec"), &device)
             .expect("nạp dec")
             .freeze();
@@ -424,8 +435,8 @@ mod tests {
 
         let metrics = per_utt_metrics(&adapter, &gen, &ds, &mel_cfg, &basis, &device, &device)
             .expect("per_utt_metrics không panic");
-        // 6 câu total, 1 câu short bị bỏ → 5 câu có metric
-        assert_eq!(metrics.len(), 5, "câu 1-frame phải bị bỏ qua trong eval");
+        // 5 câu dài → 5 chunks (câu ngắn bị bỏ)
+        assert_eq!(metrics.len(), 5, "chỉ chunk dài được giữ");
         assert!(metrics.iter().all(|m| m.mel_l1.is_finite()));
     }
 }

@@ -100,9 +100,18 @@ struct GenerateArgs {
     adapter: PathBuf,
     #[arg(long, default_value = "render.wav")]
     out_wav: PathBuf,
-    /// `0` (mặc định) = cả câu; `>0` = giới hạn số frame latent.
+    /// `0` (mặc định) = cả câu; `>0` = giới hạn tổng frame latent.
     #[arg(long, default_value_t = 0)]
-    seg: usize,
+    max_frames: usize,
+    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    #[arg(long, default_value_t = 512)]
+    chunk_frames: usize,
+    /// Context frames ± mỗi bên cho gen (mặc định 32).
+    #[arg(long, default_value_t = 32)]
+    ctx_frames: usize,
+    /// Bỏ qua chunk im lặng (RMS < −45 dBFS) — copy zeros thay vì gen.
+    #[arg(long, default_value_t = false)]
+    skip_silence: bool,
     /// `cpu` | `cuda` (mặc định `cpu` cho dev; release binary ưu tiên CUDA).
     #[arg(long, default_value = "cpu")]
     device: String,
@@ -149,10 +158,10 @@ struct TrainArgs {
     dec_dir: PathBuf,
     #[arg(long, default_value = "sources/features/bridge")]
     out_dir: PathBuf,
-    /// Số frame latent mỗi mẫu (tự co theo câu ngắn nhất).
-    #[arg(long, default_value_t = 86)]
-    seg: usize,
-    /// Số câu mỗi bước.
+    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    #[arg(long, default_value_t = 512)]
+    chunk_frames: usize,
+    /// Số chunk mỗi bước.
     #[arg(long, default_value_t = 8)]
     batch: usize,
     #[arg(long, default_value_t = 500)]
@@ -203,6 +212,9 @@ struct EvalArgs {    /// Manifest các câu val.
     /// Ngưỡng thoái lui tương đối so với baseline (mặc định 5%).
     #[arg(long, default_value_t = 0.05)]
     max_regression: f64,
+    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    #[arg(long, default_value_t = 512)]
+    chunk_frames: usize,
     /// Ghi audio sinh cho từng câu vào thư mục này.
     #[arg(long)]
     out_audio_dir: Option<PathBuf>,
@@ -395,13 +407,13 @@ fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 
     println!("== nạp dataset ==");
-    let train_ds = Dataset::load(&train_entries)?;
-    let val_ds = Dataset::load(&val_entries)?;
+    let train_ds = Dataset::load(&train_entries, a.chunk_frames)?;
+    let val_ds = Dataset::load(&val_entries, a.chunk_frames)?;
 
     let cfg = TrainConfig {
         dec_dir: a.dec_dir,
         out_dir: a.out_dir,
-        seg: a.seg,
+        chunk_frames: a.chunk_frames,
         batch: a.batch,
         steps: a.steps,
         lr: a.lr,
@@ -453,7 +465,10 @@ fn run_generate(a: GenerateArgs) -> Result<ExitCode, Box<dyn std::error::Error>>
         feats: a.feats,
         adapter: a.adapter,
         out_wav: a.out_wav,
-        seg: a.seg,
+        max_frames: a.max_frames,
+        chunk_frames: a.chunk_frames,
+        ctx_frames: a.ctx_frames,
+        skip_silence: a.skip_silence,
     };
     println!("== voice generate (device {}) ==", a.device);
     let s = render::render(&cfg, &device)?;
@@ -472,7 +487,7 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let device_eval = Device::flex();
 
     let entries = manifest::read(&a.val_manifest)?;
-    let ds = Dataset::load(&entries)?;
+    let ds = Dataset::load(&entries, a.chunk_frames)?;
     let adapter = Adapter::load(&a.adapter, &device_eval)?;
     let gen = Generator::load(&a.dec_dir, &device_eval)?;
     let mel_cfg = MelConfig::ljs();
@@ -528,10 +543,11 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // Tuỳ chọn: ghi audio sinh (nghe thử).
     if let Some(dir) = &a.out_audio_dir {
         std::fs::create_dir_all(dir)?;
-        for (u, utt) in ds.utts.iter().enumerate() {
-            let t_out = ds.latent_len(u).max(1);
+        for (k, chunk) in ds.chunks.iter().enumerate() {
+            let t_out = ds.latent_len(k).max(1);
+            let utt = &ds.utts[chunk.utt];
             let t_h = Dataset::hubert_frames_for(t_out).min(utt.t_h).max(1);
-            let host = ds.full_feats_channel_major(u, t_out);
+            let host = ds.chunk_feats_channel_major(k, t_out);
             let c = utt.c;
             let feats = burn::tensor::Tensor::<3>::from_data(
                 burn::tensor::TensorData::new(host, [1, c, t_h]),
@@ -544,7 +560,7 @@ fn run_validate(a: EvalArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 .into_data()
                 .as_slice::<f32>()?
                 .to_vec();
-            let path = dir.join(format!("{}.wav", utt.utt_id));
+            let path = dir.join(format!("{}.wav", chunk.chunk_id));
             voice_train::data::write_wav_mono(&path, &wav, 22050)?;
         }
         println!("đã ghi audio vào {}", dir.display());
