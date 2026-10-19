@@ -71,7 +71,7 @@ pub struct Dataset {
 impl Dataset {
     /// Nạp tất cả câu trong `entries`, explode thành chunks theo `chunk_frames`.
     /// - `chunk_frames == 0`: mỗi câu thành 1 chunk nguyên (offset=0, len=latent_len).
-    /// - `chunk_frames > 0`: chia câu theo `plan_chunks`, bỏ đuôi < chunk_frames.
+    /// - `chunk_frames > 0`: chia câu theo `plan_chunks` (độ dài biến động ≤ ±chunk/4).
     /// Trả lỗi nếu không còn chunk nào sau khi lọc.
     pub fn load(
         entries: &[Entry],
@@ -140,7 +140,7 @@ impl Dataset {
         // Explode utterances → chunks
         let mut chunks: Vec<Chunk> = Vec::new();
         let mut per_speaker_chunks = vec![Vec::new(); speakers.len()];
-        let mut dropped_tail_count = 0usize;
+        let mut dropped_short_count = 0usize; // câu < MIN_SEG
 
         for (u_idx, utt) in utts.iter().enumerate() {
             let total_latent = Self::latent_len_of_utt(utt);
@@ -148,8 +148,8 @@ impl Dataset {
             let utt_chunks = plan_chunks(total_latent, chunk_frames, &energy);
 
             if utt_chunks.is_empty() {
-                // Câu quá ngắn (< MIN_SEG hoặc < chunk_frames) → bỏ hoàn toàn
-                dropped_tail_count += 1;
+                // Câu quá ngắn (< MIN_SEG) → bỏ hoàn toàn
+                dropped_short_count += 1;
                 continue;
             }
 
@@ -167,13 +167,13 @@ impl Dataset {
             }
         }
 
-        if dropped_tail_count > 0 {
+        if dropped_short_count > 0 {
             eprintln!(
-                "⚠️  bỏ {dropped_tail_count} câu quá ngắn (< {} frame latent) khi chunk_frames={}",
-                crate::eval::MIN_SEG,
-                chunk_frames
+                "⚠️  bỏ {dropped_short_count} câu quá ngắn (< {} frame latent)",
+                crate::eval::MIN_SEG
             );
         }
+
 
         // per_speaker (utterance-level) giữ để compat — nhưng thực tế train/eval dùng per_speaker_chunks
         let mut per_speaker = vec![Vec::new(); speakers.len()];

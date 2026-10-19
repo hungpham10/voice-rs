@@ -7,7 +7,7 @@
 #
 # Biến môi trường (mặc định trong ngoặc):
 #   DATA (data/vivos) · TRAIN_MANIFEST ($DATA/train.csv) · VAL_MANIFEST ($DATA/val.csv)
-#   OUT_DIR ($DATA/bridge) · CHUNK (512) · BATCH (8) · STEPS (1500) · LR (1e-3)
+#   OUT_DIR ($DATA/bridge) · CHUNK (512) · BATCH (8) · ACCUM (4) · STEPS (1500) · LR (1e-3)
 #   DEVICE (cpu) · BIN_DIR (bin)
 #
 # Ưu tiên binary đã build trong ./bin/ (Colab: tải bằng ./scripts/fetch_bin.sh),
@@ -21,7 +21,10 @@ VAL="${VAL_MANIFEST:-$DATA/val.csv}"
 OUT="${OUT_DIR:-$DATA/bridge}"
 # CHUNK mới; SEG cũ vẫn hoạt động như alias (ưu tiên CHUNK nếu có)
 CHUNK="${CHUNK:-${SEG:-512}}"
-BATCH="${BATCH:-8}"
+BATCH="${BATCH:-2}"
+# ACCUM: cộng dồn gradient qua N micro-batch → effective batch = BATCH × ACCUM
+# memory chỉ theo BATCH. Mặc định 2×4 = 8 (effective batch 8, RAM ~5GB cho CHUNK=512).
+ACCUM="${ACCUM:-4}"
 STEPS="${STEPS:-1500}"
 LR="${LR:-1e-3}"
 DEVICE="${DEVICE:-cpu}"
@@ -48,10 +51,11 @@ echo "== 1/3 features ContentVec (voice embed) =="
 run_voice embed --manifest "$TRAIN" --skip-existing --device "$DEVICE"
 run_voice embed --manifest "$VAL" --skip-existing --device "$DEVICE"
 
-echo "== 2/3 train (CHUNK=${CHUNK} BATCH=${BATCH} STEPS=${STEPS}) =="
+echo "== 2/3 train (CHUNK=${CHUNK} BATCH=${BATCH}×${ACCUM} STEPS=${STEPS}) =="
 run_voice train \
   --train-manifest "$TRAIN" --val-manifest "$VAL" --out-dir "$OUT" \
-  --chunk-frames "$CHUNK" --batch "$BATCH" --steps "$STEPS" --lr "$LR" --device "$DEVICE"
+  --chunk-frames "$CHUNK" --batch "$BATCH" --grad-accum "$ACCUM" \
+  --steps "$STEPS" --lr "$LR" --device "$DEVICE"
 
 echo "== 3/3 validate (cổng PASS/FAIL) =="
 run_voice validate \
