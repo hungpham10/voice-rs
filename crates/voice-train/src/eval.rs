@@ -25,7 +25,7 @@ use crate::mel;
 
 /// Đáy đoạn cần có để tính mel-l1 (khớp MIN_SEG trong train.rs): STFT cần >
 /// n_fft/2 = 512 mẫu → ≥ 3 frame; lấy 32 frame để loss ổn định.
-const MIN_SEG: usize = 32;
+pub const MIN_SEG: usize = 32;
 
 /// Chỉ số của một câu.
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ pub struct EvalReport {
     pub drift: f64,
 }
 
-/// Tính chỉ số từng câu (một lượt sinh). Dùng lại cho cả `evaluate` và `train`.
+/// Tính chỉ số từng chunk (một lượt sinh). Dùng lại cho cả `evaluate` và `train`.
 pub fn per_utt_metrics(
     adapter: &Adapter,
     gen_eval: &Generator,
@@ -71,18 +71,15 @@ pub fn per_utt_metrics(
     device_eval: &Device,
 ) -> Result<Vec<UttMetric>, Box<dyn std::error::Error>> {
     let c = ds.check_dims()?;
-    let mut out = Vec::with_capacity(ds.utts.len());
-    let mut skipped = 0usize;
+    let mut out = Vec::with_capacity(ds.chunks.len());
 
-    for (u, utt) in ds.utts.iter().enumerate() {
-        let t_out = ds.latent_len(u);
+    for (k, chunk) in ds.chunks.iter().enumerate() {
+        let t_out = ds.latent_len(k);
         if t_out < MIN_SEG {
-            skipped += 1;
-            continue;
+            continue; // đã bị lọc ở load, defensive
         }
-        let t_out = t_out.max(1);
-        let t_h = Dataset::hubert_frames_for(t_out).min(utt.t_h).max(1);
-        let host = ds.full_feats_channel_major(u, t_out);
+        let t_h = Dataset::hubert_frames_for(t_out).min(ds.utts[chunk.utt].t_h).max(1);
+        let host = ds.chunk_feats_channel_major(k, t_out);
         debug_assert_eq!(host.len(), c * t_h);
 
         let feats = Tensor::<3>::from_data(TensorData::new(host, [1, c, t_h]), device);
@@ -91,7 +88,7 @@ pub fn per_utt_metrics(
         let z_eval = z.to_device(device_eval);
         let wav = gen_eval.forward(z_eval, None, false).reshape([1, n]);
 
-        let (target_host, _) = ds.segment_wav(u, 0, t_out);
+        let (target_host, _) = ds.segment_wav(k, 0, t_out);
         let target = Tensor::<2>::from_data(TensorData::new(target_host, [1, n]), device_eval);
 
         let lv: f64 = mel::mel_l1(wav.clone(), target, cfg, basis)
@@ -106,16 +103,13 @@ pub fn per_utt_metrics(
         };
 
         out.push(UttMetric {
-            utt_id: utt.utt_id.clone(),
-            speaker_id: ds.speakers[utt.speaker].clone(),
+            utt_id: chunk.chunk_id.clone(),
+            speaker_id: ds.speakers[ds.utts[chunk.utt].speaker].clone(),
             mel_l1: lv,
             rms,
             samples: n,
             finite,
         });
-    }
-    if skipped > 0 {
-        eprintln!("⚠️  eval bỏ qua {skipped} câu quá ngắn (< {MIN_SEG} frame latent)");
     }
     Ok(out)
 }

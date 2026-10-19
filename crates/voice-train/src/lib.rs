@@ -23,4 +23,5 @@ pub mod hub;
 pub mod manifest;
 pub mod mel;
 pub mod render;
+pub mod streaming;
 pub mod train;

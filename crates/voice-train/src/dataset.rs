@@ -5,7 +5,7 @@
 //!
 //! - nạp wav → resample 22.05 kHz **ngoài mạng** (giống `train_adapter`),
 //! - nạp features và hoán vị sang channel-major `[1, 768, T_h]`,
-//! - cắt đoạn (segment) **cân bằng theo giọng** ở tầng trên.
+//! - chunking: câu dài → nhiều chunk ≤ `chunk_frames`, biên ở vùng yên (energy minima).
 //!
 //! Mọi thứ dùng số học xác định (không phụ thuộc thread) để `eval` chạy lại luôn
 //! cho cùng kết quả — điều kiện cho chỉ số `drift` = 0 (§13.6.4g).
@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use crate::manifest::Entry;
+use crate::streaming::{energy_profile_wav, plan_chunks};
 
 /// Tần số frame latent của `dec` (`22050 / 256`) — §14.4.
 pub const LATENT_HZ: f64 = 86.1328125;
@@ -22,7 +23,8 @@ pub const HUBERT_HZ: f64 = 50.0;
 /// Số mẫu audio mỗi frame latent.
 pub const SAMPLES_PER_FRAME: usize = 256;
 
-/// Một câu: features (time-major) + wav đích 22.05 kHz.
+/// Một câu gốc: features (time-major) + wav đích 22.05 kHz.
+/// Lưu nguyên file, không nhân bản — chunk chỉ lưu offset/len.
 #[derive(Debug, Clone)]
 pub struct Utterance {
     /// Chỉ số giọng trong [`Dataset::speakers`].
@@ -40,18 +42,41 @@ pub struct Utterance {
     pub f0: Option<Vec<f32>>,
 }
 
-/// Dataset đã nạp, kèm chỉ mục theo giọng.
+/// Một chunk trong câu — đơn vị sample training/eval/generate.
+#[derive(Debug, Clone)]
+pub struct Chunk {
+    /// Chỉ số vào `Dataset::utts` (câu gốc).
+    pub utt: usize,
+    /// Frame latent bắt đầu trong câu gốc.
+    pub offset_lat: usize,
+    /// Độ dài chunk (luôn == `chunk_frames`, đuôi < chunk_frames đã bị bỏ).
+    pub len_lat: usize,
+    /// ID dạng "utt_id#k" để trace/log.
+    pub chunk_id: String,
+}
+
+/// Dataset đã nạp, kèm chỉ mục theo giọng ở cấp chunk.
 #[derive(Debug)]
 pub struct Dataset {
     pub speakers: Vec<String>,
     pub utts: Vec<Utterance>,
-    /// `per_speaker[s]` = danh sách chỉ số `utts` thuộc giọng `s`.
+    /// `per_speaker[s]` = danh sách chỉ số `utts` thuộc giọng `s` (giữ cho backward compat nếu cần).
     pub per_speaker: Vec<Vec<usize>>,
+    /// Danh sách tất cả chunks (đơn vị sample thực tế).
+    pub chunks: Vec<Chunk>,
+    /// `per_speaker_chunks[s]` = chỉ số chunks thuộc giọng `s`.
+    pub per_speaker_chunks: Vec<Vec<usize>>,
 }
 
 impl Dataset {
-    /// Nạp tất cả câu trong `entries` (đã lọc theo split bởi người gọi).
-    pub fn load(entries: &[Entry]) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Nạp tất cả câu trong `entries`, explode thành chunks theo `chunk_frames`.
+    /// - `chunk_frames == 0`: mỗi câu thành 1 chunk nguyên (offset=0, len=latent_len).
+    /// - `chunk_frames > 0`: chia câu theo `plan_chunks`, bỏ đuôi < chunk_frames.
+    /// Trả lỗi nếu không còn chunk nào sau khi lọc.
+    pub fn load(
+        entries: &[Entry],
+        chunk_frames: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut speakers: Vec<String> = Vec::new();
         let mut utts: Vec<Utterance> = Vec::new();
 
@@ -112,18 +137,80 @@ impl Dataset {
             });
         }
 
+        // Explode utterances → chunks
+        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut per_speaker_chunks = vec![Vec::new(); speakers.len()];
+        let mut dropped_tail_count = 0usize;
+
+        for (u_idx, utt) in utts.iter().enumerate() {
+            let total_latent = Self::latent_len_of_utt(utt);
+            let energy = energy_profile_wav(&utt.wav);
+            let utt_chunks = plan_chunks(total_latent, chunk_frames, &energy);
+
+            if utt_chunks.is_empty() {
+                // Câu quá ngắn (< MIN_SEG hoặc < chunk_frames) → bỏ hoàn toàn
+                dropped_tail_count += 1;
+                continue;
+            }
+
+            for (k, (offset, len)) in utt_chunks.into_iter().enumerate() {
+                let chunk_idx = chunks.len();
+                let chunk_id = format!("{}#{}", utt.utt_id, k);
+                let chunk = Chunk {
+                    utt: u_idx,
+                    offset_lat: offset,
+                    len_lat: len,
+                    chunk_id,
+                };
+                chunks.push(chunk);
+                per_speaker_chunks[utt.speaker].push(chunk_idx);
+            }
+        }
+
+        if dropped_tail_count > 0 {
+            eprintln!(
+                "⚠️  bỏ {dropped_tail_count} câu quá ngắn (< {} frame latent) khi chunk_frames={}",
+                crate::eval::MIN_SEG,
+                chunk_frames
+            );
+        }
+
+        // per_speaker (utterance-level) giữ để compat — nhưng thực tế train/eval dùng per_speaker_chunks
         let mut per_speaker = vec![Vec::new(); speakers.len()];
         for (i, u) in utts.iter().enumerate() {
             per_speaker[u.speaker].push(i);
         }
-        // Giọng không có câu nào là lỗi cấu hình — báo sớm.
         for (i, list) in per_speaker.iter().enumerate() {
             if list.is_empty() {
                 return Err(format!("giọng {} không có câu nào", speakers[i]).into());
             }
         }
 
-        Ok(Self { speakers, utts, per_speaker })
+        // Validate: ít nhất 1 chunk cho mỗi giọng active
+        for (i, list) in per_speaker_chunks.iter().enumerate() {
+            if list.is_empty() {
+                return Err(format!(
+                    "giọng {} không có chunk nào đủ dài (chunk_frames={})",
+                    speakers[i], chunk_frames
+                )
+                .into());
+            }
+        }
+
+        Ok(Self {
+            speakers,
+            utts,
+            per_speaker,
+            chunks,
+            per_speaker_chunks,
+        })
+    }
+
+    /// Số frame latent của utterance (dùng cho test).
+    pub fn latent_len_of_utt(utt: &Utterance) -> usize {
+        let by_feat = (utt.t_h as f64 * LATENT_HZ / HUBERT_HZ).floor() as usize;
+        let by_wav = utt.wav.len() / SAMPLES_PER_FRAME;
+        by_feat.min(by_wav).max(1)
     }
 
     pub fn num_speakers(&self) -> usize {
@@ -135,22 +222,23 @@ impl Dataset {
         ((t_out as f64 * HUBERT_HZ / LATENT_HZ).round() as usize).max(1)
     }
 
-    /// Số frame latent tối đa sinh được từ câu `u` (giới hạn bởi cả features và wav).
-    pub fn latent_len(&self, u: usize) -> usize {
-        let utt = &self.utts[u];
-        let by_feat = (utt.t_h as f64 * LATENT_HZ / HUBERT_HZ).floor() as usize;
-        let by_wav = utt.wav.len() / SAMPLES_PER_FRAME;
-        by_feat.min(by_wav).max(1)
+    /// Số frame latent của chunk `k` (luôn == chunk_frames, trừ khi chunk_frames=0).
+    pub fn latent_len(&self, k: usize) -> usize {
+        self.chunks[k].len_lat
     }
 
-    /// Cắt `t_h_seg` frame HuBERT từ `h0`, trả **channel-major** `[1, c, t_h_seg]`.
-    pub fn segment_feats_channel_major(&self, u: usize, h0: usize, t_h_seg: usize) -> Vec<f32> {
-        let utt = &self.utts[u];
-        let h1 = (h0 + t_h_seg).min(utt.t_h);
-        let h0 = h0.min(h1.saturating_sub(1));
-        let t = h1 - h0;
+    /// Cắt `t_h_seg` frame HuBERT từ `h0` của chunk `k`, trả channel-major `[1, c, t_h_seg]`.
+    /// `h0` là offset HuBERT *trong chunk* (0 = đầu chunk).
+    pub fn segment_feats_channel_major(&self, k: usize, h0: usize, t_h_seg: usize) -> Vec<f32> {
+        let chunk = &self.chunks[k];
+        let utt = &self.utts[chunk.utt];
+        // Chuyển offset latent của chunk → offset HuBERT
+        let h0_global = ((chunk.offset_lat as f64 * HUBERT_HZ / LATENT_HZ).floor() as usize) + h0;
+        let h1 = (h0_global + t_h_seg).min(utt.t_h);
+        let h0_clamped = h0_global.min(h1.saturating_sub(1));
+        let t = h1 - h0_clamped;
         let mut out = vec![0.0f32; utt.c * t];
-        for (row, feat_row) in (h0..h1).enumerate() {
+        for (row, feat_row) in (h0_clamped..h1).enumerate() {
             let src = &utt.feats[feat_row * utt.c..(feat_row + 1) * utt.c];
             for (ch, &v) in src.iter().enumerate() {
                 out[ch * t + row] = v;
@@ -159,26 +247,29 @@ impl Dataset {
         out
     }
 
-    /// Cắt `t_out` frame latent (bắt đầu ở latent `l0`) từ wav đích.
-    /// Trả `(mẫu, n)` với `n = t_out * 256` (đã kẹp theo wav thực có).
-    pub fn segment_wav(&self, u: usize, l0: usize, t_out: usize) -> (Vec<f32>, usize) {
-        let utt = &self.utts[u];
+    /// Cắt `t_out` frame latent từ wav đích của chunk `k`.
+    /// `l0` là offset latent *trong chunk* (0 = đầu chunk).
+    /// Trả `(mẫu, n)` với `n = t_out * 256`.
+    pub fn segment_wav(&self, k: usize, l0: usize, t_out: usize) -> (Vec<f32>, usize) {
+        let chunk = &self.chunks[k];
+        let utt = &self.utts[chunk.utt];
         let n = t_out * SAMPLES_PER_FRAME;
-        let start = l0 * SAMPLES_PER_FRAME;
+        let global_l0 = chunk.offset_lat + l0;
+        let start = global_l0 * SAMPLES_PER_FRAME;
         let end = (start + n).min(utt.wav.len());
         let mut out = utt.wav[start.min(utt.wav.len())..end].to_vec();
-        // Kẹp lại cho đúng `n` để batch đều (pad bằng 0 nếu thiếu — hiếm khi xảy ra).
         out.resize(n, 0.0);
         (out, n)
     }
 
-    /// Toàn bộ câu, channel-major, dùng cho `eval` (xác định, đủ dài).
-    pub fn full_feats_channel_major(&self, u: usize, t_out: usize) -> Vec<f32> {
-        let t_h = Self::hubert_frames_for(t_out).min(self.utts[u].t_h);
-        self.segment_feats_channel_major(u, 0, t_h)
+    /// Lấy features channel-major của chunk `k` (toàn bộ chunk, dùng cho eval).
+    /// `t_out` phải == `latent_len(k)`.
+    pub fn chunk_feats_channel_major(&self, k: usize, t_out: usize) -> Vec<f32> {
+        let t_h = Self::hubert_frames_for(t_out).min(self.utts[self.chunks[k].utt].t_h);
+        self.segment_feats_channel_major(k, 0, t_h)
     }
 
-    /// Kiểm tra tất cả câu cùng chiều features (bắt buộc để xếp batch).
+    /// Kiểm tra tất cả câu gốc cùng chiều features (bắt buộc để xếp batch).
     pub fn check_dims(&self) -> Result<usize, String> {
         let mut c = None;
         for u in &self.utts {
@@ -191,6 +282,11 @@ impl Dataset {
             }
         }
         c.ok_or_else(|| "dataset rỗng".to_string())
+    }
+
+    /// Số chunks tổng.
+    pub fn num_chunks(&self) -> usize {
+        self.chunks.len()
     }
 }
 
@@ -247,52 +343,138 @@ pub fn stack_rows(rows: &[(Vec<f32>, usize)]) -> (Vec<f32>, usize, usize) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hubert_frames_round_trip() {
-        // 86 latent frame ≈ 1 s → ~50 frame HuBERT.
-        assert_eq!(Dataset::hubert_frames_for(86), 50);
-        assert_eq!(Dataset::hubert_frames_for(1), 1);
-    }
-
-    fn fake_utt() -> Utterance {
-        // 4 frame HuBERT, c = 2 → channel-major [1,2,4].
+    fn make_utt(t_h: usize, c: usize, latent_frames: usize) -> Utterance {
         Utterance {
             speaker: 0,
             utt_id: "u".into(),
-            t_h: 4,
-            c: 2,
-            feats: vec![
-                1.0, 2.0, // frame 0: ch0, ch1
-                3.0, 4.0, // frame 1
-                5.0, 6.0, // frame 2
-                7.0, 8.0, // frame 3
-            ],
-            wav: vec![0.0; SAMPLES_PER_FRAME * 10],
+            t_h,
+            c,
+            feats: vec![0.5f32; t_h * c],
+            wav: vec![0.1f32; latent_frames * SAMPLES_PER_FRAME],
             f0: None,
         }
     }
 
     #[test]
-    fn channel_major_slicing_is_correct() {
-        let ds = Dataset {
-            speakers: vec!["a".into()],
-            utts: vec![fake_utt()],
-            per_speaker: vec![vec![0]],
-        };
-        // Lấy frame 1..3 → channel-major: ch0 = [3,5], ch1 = [4,6].
-        let seg = ds.segment_feats_channel_major(0, 1, 2);
-        assert_eq!(seg, vec![3.0, 5.0, 4.0, 6.0]);
+    fn hubert_frames_round_trip() {
+        assert_eq!(Dataset::hubert_frames_for(86), 50);
+        assert_eq!(Dataset::hubert_frames_for(1), 1);
     }
 
     #[test]
-    fn latent_len_limited_by_features() {
+    fn chunking_zero_is_full_utt() {
+        // chunk_frames = 0 → 1 chunk = cả câu
+        let utt = make_utt(100, 768, 200); // ~200 frame latent
         let ds = Dataset {
-            speakers: vec!["a".into()],
-            utts: vec![fake_utt()],
+            speakers: vec!["spk".into()],
+            utts: vec![utt],
             per_speaker: vec![vec![0]],
+            chunks: vec![Chunk {
+                utt: 0,
+                offset_lat: 0,
+                len_lat: 200,
+                chunk_id: "u#0".into(),
+            }],
+            per_speaker_chunks: vec![vec![0]],
         };
-        // 4 frame HuBERT → floor(4 * 86.13/50) = 6 latent; wav cho 10 → min = 6.
-        assert_eq!(ds.latent_len(0), 6);
+        assert_eq!(ds.num_chunks(), 1);
+        assert_eq!(ds.latent_len(0), 200);
+        assert_eq!(ds.chunks[0].offset_lat, 0);
+    }
+
+    #[test]
+    fn chunking_splits_long_utt() {
+        // chunk_frames = 512, câu 1200 latent → 2 chunk 512, đuôi 176 bỏ
+        let utt = make_utt(600, 768, 1200);
+        let ds = Dataset {
+            speakers: vec!["spk".into()],
+            utts: vec![utt],
+            per_speaker: vec![vec![0]],
+            chunks: vec![
+                Chunk { utt: 0, offset_lat: 0, len_lat: 512, chunk_id: "u#0".into() },
+                Chunk { utt: 0, offset_lat: 512, len_lat: 512, chunk_id: "u#1".into() },
+            ],
+            per_speaker_chunks: vec![vec![0, 1]],
+        };
+        assert_eq!(ds.num_chunks(), 2);
+        assert_eq!(ds.latent_len(0), 512);
+        assert_eq!(ds.latent_len(1), 512);
+        assert_eq!(ds.chunks[0].offset_lat, 0);
+        assert_eq!(ds.chunks[1].offset_lat, 512);
+    }
+
+    #[test]
+    fn segment_feats_channel_major_chunk() {
+        // chunk offset_lat=100, len=512, h0=0 → global h0 = floor(100 * 50 / 86.13) = 58
+        let c = 2;
+        let t_h = 100;
+        let utt = Utterance {
+            speaker: 0,
+            utt_id: "u".into(),
+            t_h,
+            c,
+            feats: (0..t_h * c).map(|i| i as f32).collect(),
+            wav: vec![0.0; 1000 * SAMPLES_PER_FRAME],
+            f0: None,
+        };
+        let ds = Dataset {
+            speakers: vec!["spk".into()],
+            utts: vec![utt],
+            per_speaker: vec![vec![0]],
+            chunks: vec![Chunk {
+                utt: 0,
+                offset_lat: 100,
+                len_lat: 512,
+                chunk_id: "u#0".into(),
+            }],
+            per_speaker_chunks: vec![vec![0]],
+        };
+        // Lấy 2 frame HuBERT từ đầu chunk
+        let seg = ds.segment_feats_channel_major(0, 0, 2);
+        // global h0 = floor(100 * 50 / 86.13) = 58
+        // frame 58: ch0=58*2=116, ch1=117; frame 59: ch0=118, ch1=119
+        assert_eq!(seg, vec![116.0, 118.0, 117.0, 119.0]);
+    }
+
+    #[test]
+    fn segment_wav_chunk() {
+        let utt = make_utt(100, 768, 200);
+        let ds = Dataset {
+            speakers: vec!["spk".into()],
+            utts: vec![utt],
+            per_speaker: vec![vec![0]],
+            chunks: vec![Chunk {
+                utt: 0,
+                offset_lat: 50,
+                len_lat: 100,
+                chunk_id: "u#0".into(),
+            }],
+            per_speaker_chunks: vec![vec![0]],
+        };
+        // chunk offset=50, l0=0, t_out=10 → global start = 60
+        let (wav, n) = ds.segment_wav(0, 0, 10);
+        assert_eq!(n, 10 * SAMPLES_PER_FRAME);
+        assert_eq!(wav.len(), n);
+    }
+
+    #[test]
+    fn chunk_feats_channel_major() {
+        let utt = make_utt(100, 768, 200);
+        let ds = Dataset {
+            speakers: vec!["spk".into()],
+            utts: vec![utt],
+            per_speaker: vec![vec![0]],
+            chunks: vec![Chunk {
+                utt: 0,
+                offset_lat: 0,
+                len_lat: 150,
+                chunk_id: "u#0".into(),
+            }],
+            per_speaker_chunks: vec![vec![0]],
+        };
+        let feats = ds.chunk_feats_channel_major(0, 150);
+        let t_h = Dataset::hubert_frames_for(150).min(100);
+        assert_eq!(feats.len(), 768 * t_h);
     }
 
     #[test]
