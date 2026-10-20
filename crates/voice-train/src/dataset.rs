@@ -69,14 +69,20 @@ pub struct Dataset {
 }
 
 impl Dataset {
-    /// Nạp tất cả câu trong `entries`, explode thành chunks theo `chunk_frames`.
-    /// - `chunk_frames == 0`: mỗi câu thành 1 chunk nguyên (offset=0, len=latent_len).
-    /// - `chunk_frames > 0`: chia câu theo `plan_chunks` (độ dài biến động ≤ ±chunk/4).
+    /// Nạp tất cả câu trong `entries`, explode thành chunks theo `chunk_frames`
+    /// (độ dài biến động ≤ ±chunk/4, kiểu Applio; `chunk_frames == 0` bị chặn).
     /// Trả lỗi nếu không còn chunk nào sau khi lọc.
     pub fn load(
         entries: &[Entry],
         chunk_frames: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        if chunk_frames == 0 {
+            return Err(
+                "chunk_frames = 0 không còn hỗ trợ (v2.2.18+): nạp nguyên câu gây OOM — \
+                 hãy dùng ≥ MIN_SEG (32), câu dài được chia chunk tự động"
+                    .into(),
+            );
+        }
         let mut speakers: Vec<String> = Vec::new();
         let mut utts: Vec<Utterance> = Vec::new();
 
@@ -362,8 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn chunking_zero_is_full_utt() {
-        // chunk_frames = 0 → 1 chunk = cả câu
+    fn chunking_zero_is_rejected() {
         let utt = make_utt(100, 768, 200); // ~200 frame latent
         let ds = Dataset {
             speakers: vec!["spk".into()],
@@ -378,8 +383,7 @@ mod tests {
             per_speaker_chunks: vec![vec![0]],
         };
         assert_eq!(ds.num_chunks(), 1);
-        assert_eq!(ds.latent_len(0), 200);
-        assert_eq!(ds.chunks[0].offset_lat, 0);
+        assert!(super::Dataset::load(&[], 0).is_err(), "chunk_frames=0 phải bị chặn");
     }
 
     #[test]

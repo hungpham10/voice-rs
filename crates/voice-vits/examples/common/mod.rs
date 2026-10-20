@@ -3,7 +3,7 @@
 //! Re-export từ [`voice_vits::npz`] để duy nhất một nguồn đọc npz cho toàn bộ
 //! các ví dụ verify.
 
-pub use voice_vits::npz::{self, read_npz, Npz};
+pub use voice_vits::npz::read_npz;
 
 use std::path::Path;
 

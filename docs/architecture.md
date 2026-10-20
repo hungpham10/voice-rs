@@ -1353,7 +1353,7 @@ không còn đoán mò.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
-| `--chunk-frames` | `512` | Số frame latent mỗi chunk (0 = không chunk, fallback cũ) |
+| `--chunk-frames` | `512` | Số frame latent mỗi chunk (`0` không còn hỗ trợ từ v2.2.19 — nạp nguyên câu gây OOM) |
 | `--grad-accum` | `1` | Cộng dồn gradient qua N micro-batch (effective batch = batch × N) |
 | `--ctx-frames` | `32` | Context ± mỗi bên khi gen chunk (trim sau) |
 | `--skip-silence` | `false` | Bỏ qua chunk im lặng (RMS < −45 dBFS) → copy zeros |
