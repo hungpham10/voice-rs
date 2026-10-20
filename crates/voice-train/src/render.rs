@@ -90,31 +90,6 @@ pub fn render(
     }
     .max(1);
 
-    // Backward compat: chunk_frames == 0 → render nguyên câu (cũ)
-    if cfg.chunk_frames == 0 {
-        let t_h = ((t_out_total as f64 * HUBERT_HZ / LATENT_HZ).round() as usize)
-            .min(t_h_full)
-            .max(1);
-        let feats = feats_full.narrow(2, 0, t_h);
-
-        let z = adapter.forward_to(feats, t_out_total);
-        let samples = t_out_total * SAMPLES_PER_FRAME;
-        let wav = gen
-            .forward(z, None, false)
-            .reshape([1, samples])
-            .into_data()
-            .as_slice::<f32>()?
-            .to_vec();
-        data::write_wav_mono(&cfg.out_wav, &wav, OUT_SR)?;
-
-        return Ok(RenderSummary {
-            t_out: t_out_total,
-            samples,
-            seconds: samples as f64 / OUT_SR as f64,
-            out_wav: cfg.out_wav.clone(),
-        });
-    }
-
     // ===== Chunking kiểu Applio: split → gen với context → trim → concat =====
     let chunk_frames = cfg.chunk_frames;
     let ctx = cfg.ctx_frames;

@@ -103,7 +103,7 @@ struct GenerateArgs {
     /// `0` (mặc định) = cả câu; `>0` = giới hạn tổng frame latent.
     #[arg(long, default_value_t = 0)]
     max_frames: usize,
-    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    /// Frame latent mỗi chunk (mặc định 512; `0` không còn hỗ trợ từ v2.2.18+).
     #[arg(long, default_value_t = 512)]
     chunk_frames: usize,
     /// Context frames ± mỗi bên cho gen (mặc định 32).
@@ -158,7 +158,7 @@ struct TrainArgs {
     dec_dir: PathBuf,
     #[arg(long, default_value = "sources/features/bridge")]
     out_dir: PathBuf,
-    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    /// Frame latent mỗi chunk (mặc định 512; `0` không còn hỗ trợ từ v2.2.18+).
     #[arg(long, default_value_t = 512)]
     chunk_frames: usize,
     /// Số chunk mỗi micro-batch (memory thực tế; effective batch = batch × grad-accum).
@@ -215,7 +215,7 @@ struct EvalArgs {    /// Manifest các câu val.
     /// Ngưỡng thoái lui tương đối so với baseline (mặc định 5%).
     #[arg(long, default_value_t = 0.05)]
     max_regression: f64,
-    /// Số frame latent mỗi chunk (0 = không chunk, cả câu; mặc định 512).
+    /// Frame latent mỗi chunk (mặc định 512; `0` không còn hỗ trợ từ v2.2.18+).
     #[arg(long, default_value_t = 512)]
     chunk_frames: usize,
     /// Ghi audio sinh cho từng câu vào thư mục này.

@@ -82,21 +82,17 @@ pub fn run_training(
     }
 
     // Validate chunk_frames
-    let chunk_frames = if cfg.chunk_frames == 0 {
-        // Backward compat: không chunk, dùng min_latent logic cũ (không khuyến khích)
-        eprintln!("⚠️  chunk_frames=0 (backward compat): sẽ dùng min_latent logic cũ");
-        // Fallback: compute min latent across utterances
-        (0..train_ds.utts.len())
-            .map(|u| train_ds.latent_len(u))
-            .min()
-            .unwrap_or(1)
-            .max(MIN_SEG)
-    } else {
-        if cfg.chunk_frames < MIN_SEG {
-            return Err(format!("chunk_frames ({}) phải ≥ MIN_SEG ({})", cfg.chunk_frames, MIN_SEG).into());
-        }
-        cfg.chunk_frames
-    };
+    let chunk_frames = cfg.chunk_frames;
+    if chunk_frames == 0 {
+        return Err(
+            "chunk_frames = 0 không còn hỗ trợ (v2.2.18+): nạp nguyên câu gây OOM — \
+             hãy dùng ≥ MIN_SEG (32), Dataset::load cũng tự chặn"
+                .into(),
+        );
+    }
+    if chunk_frames < MIN_SEG {
+        return Err(format!("chunk_frames ({chunk_frames}) phải ≥ MIN_SEG ({MIN_SEG})").into());
+    }
 
     let t_h_seg = Dataset::hubert_frames_for(chunk_frames);
     let n = chunk_frames * SAMPLES_PER_FRAME;
@@ -452,23 +448,12 @@ mod tests {
         for (i, u) in utts.iter().enumerate() {
             per_speaker[u.speaker].push(i);
         }
-        // Build chunks for given chunk_frames
+        // Build chunks for given chunk_frames (0 không hợp lệ — Tests luôn truyền ≥ MIN_SEG)
         let mut chunks = Vec::new();
         let mut per_speaker_chunks = vec![Vec::new(); 1];
         for (u_idx, utt) in utts.iter().enumerate() {
             let total = Dataset::latent_len_of_utt(utt);
-            if chunk_frames == 0 {
-                // Full utterance
-                let chunk = Chunk {
-                    utt: u_idx,
-                    offset_lat: 0,
-                    len_lat: total,
-                    chunk_id: format!("{}#0", utt.utt_id),
-                };
-                let cidx = chunks.len();
-                chunks.push(chunk);
-                per_speaker_chunks[0].push(cidx);
-            } else if total >= chunk_frames {
+            if total >= chunk_frames {
                 // 1 chunk per utterance (since total < 2*chunk_frames)
                 let chunk = Chunk {
                     utt: u_idx,
@@ -491,14 +476,14 @@ mod tests {
     }
 
     #[test]
-    fn chunk_frames_zero_does_not_panic_on_short_utterance() {
+    fn chunk_frames_zero_is_rejected() {
         if !Path::new("sources/vits_ljs_dec/config.json").exists() {
             eprintln!("skip: sources/vits_ljs_dec thiếu");
             return;
         }
         let device = Device::flex();
-        let train_ds = make_ds(0);
-        let val_ds = make_ds(0);
+        let train_ds = make_ds(64);
+        let val_ds = make_ds(64);
 
         let cfg = TrainConfig {
             dec_dir: PathBuf::from("sources/vits_ljs_dec"),
@@ -513,10 +498,11 @@ mod tests {
             checkpoint_every: 0,
             nsf: false,
         };
-        let summary = run_training(&train_ds, &val_ds, &cfg, &device).expect("train không panic");
-        assert!(summary.first.is_finite());
-        assert!(summary.last.is_finite());
-        assert_eq!(summary.chunk_frames, MIN_SEG, "chunk_frames=0 fallback phải bám đáy MIN_SEG");
+        let err = run_training(&train_ds, &val_ds, &cfg, &device).unwrap_err();
+        assert!(
+            err.to_string().contains("không còn hỗ trợ"),
+            "lỗi phải nêu rõ fallback bị bỏ: {err}"
+        );
     }
 
     #[test]

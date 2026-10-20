@@ -1,6 +1,6 @@
 //! F0 decode: salience [360, T] -> f0 [T]
 
-use burn::tensor::{Tensor, Float, TensorData};
+use burn::tensor::{Tensor, Float};
 
 pub const N_CLASS: usize = 360;
 pub const THRED: f32 = 0.03; // Applio's filter_radius, NOT 0.5 from paper
@@ -105,6 +105,7 @@ pub fn quantize(f0: &[f32]) -> Vec<i32> {
 
 #[cfg(test)]
 mod tests {
+    use burn::tensor::TensorData;
     use super::*;
 
     #[test]
