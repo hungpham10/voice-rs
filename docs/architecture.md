@@ -1288,7 +1288,7 @@ Unit test `burn_mel_matches_rosa` giữ hai đường khớp: max diff `5.3e-3`,
 
 **Vòng huấn luyện** (`src/train.rs`, subcommand `voice train`):
 `feats [1,768,T_h] → Adapter → z [1,192,t_out] → dec (freeze) → wav → log-mel`,
-`loss = L1(mel_gen, mel_target)`, Adam `lr=1e-3`. Wav đích 16 kHz được
+`loss = L1(mel_gen, mel_target)`, Adam `lr=1e-4` (giảm từ `1e-3` tại v2.2.22 để tránh NaN với lr cao). Wav đích 16 kHz được
 `resample_linear` lên 22.05 kHz **ngoài mạng** rồi cắt còn `t_out·256` mẫu.
 
 **Kết quả (đo thật):** `--seg 86` (1 s) · 40 bước → `mel-L1` `1.847 → 0.830`

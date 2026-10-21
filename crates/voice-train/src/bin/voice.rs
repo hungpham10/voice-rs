@@ -169,7 +169,7 @@ struct TrainArgs {
     grad_accum: usize,
     #[arg(long, default_value_t = 500)]
     steps: usize,
-    #[arg(long, default_value_t = 1e-3)]
+    #[arg(long, default_value_t = 1e-4)]
     lr: f64,
     /// Cứ bao nhiêu bước đo val một lần.
     #[arg(long, default_value_t = 50)]
