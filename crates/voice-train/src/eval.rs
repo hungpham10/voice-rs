@@ -85,7 +85,10 @@ pub fn per_utt_metrics(
         let feats = Tensor::<3>::from_data(TensorData::new(host, [1, c, t_h]), device);
         let z = adapter.forward_to(feats, t_out);
         let n = t_out * crate::dataset::SAMPLES_PER_FRAME;
-        let z_eval = z.to_device(device_eval);
+        // Gỡ grad khỏi z: eval chỉ forward — nếu để z mang autodiff tracking,
+        // burn dựng backward-graph 200 layer cho mọi chunk mà không bao giờ
+        // gọi backward() giải phóng → VRAM cạn dần (lỗi OOM v2.2.18/19).
+        let z_eval = z.detach().to_device(device_eval);
         let wav = gen_eval.forward(z_eval, None, false).reshape([1, n]);
 
         let (target_host, _) = ds.segment_wav(k, 0, t_out);

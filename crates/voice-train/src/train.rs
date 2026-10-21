@@ -179,6 +179,8 @@ pub fn run_training(
     let mut last = f64::NAN;
     let mut best_val = f64::INFINITY;
     let mut best_adapter = adapter.clone();
+    // best = last ban đầu: nếu val không chạy lần nào, best = bản train cuối.
+    let mut val_ran = false;
     let mut history: Vec<(usize, f64, Option<f64>)> = Vec::with_capacity(cfg.steps);
 
     let checkpoint_path = if cfg.checkpoint_every > 0 {
@@ -293,6 +295,7 @@ pub fn run_training(
         let do_val =
             cfg.val_every > 0 && ((step + 1) % cfg.val_every == 0 || step + 1 == cfg.steps);
         let val_now = if do_val {
+            val_ran = true;
             // Cùng device với train — module tự do Grad tracking khi forward không require_grad.
             let report = eval::evaluate(&adapter, &gen, val_ds, &mel_cfg, &basis, &device, &device)?;
             let improved = report.mean_mel_l1 < best_val;
@@ -320,7 +323,14 @@ pub fn run_training(
     }
 
     adapter.save(&adapter_path)?;
-    best_adapter.save(&best_path)?;
+    // val_every = 0 → không bao giờ val → best_adapter còn là bản khởi tạo random:
+    // phải lưu bản train (last) làm best để adapter_best.bpk luôn dùng được.
+    if val_ran {
+        best_adapter.save(&best_path)?;
+    } else {
+        adapter.save(&best_path)?;
+        eprintln!("⚠️  val_every = 0 — không có val; adapter_best.bpk = bản train cuối (không phải init random)");
+    }
 
     Ok(TrainingSummary {
         first,
