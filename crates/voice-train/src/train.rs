@@ -412,10 +412,12 @@ pub fn run_training(
 /// Burn 0.22 không có `merge` — cộng tay theo param id: rank 2 (weight) và
 /// rank 1 (bias) của `Adapter`).
 fn merge_into(cum: &mut GradientsParams, gp: &mut GradientsParams, adapter: &Adapter) {
-    let (w_id, b_id) = adapter.param_ids();
-    add_grad::<2>(cum, gp, w_id);
-    if let Some(b) = b_id {
-        add_grad::<1>(cum, gp, b);
+    for (id, rank) in adapter.param_ids() {
+        match rank {
+            2 => add_grad::<2>(cum, gp, id),
+            1 => add_grad::<1>(cum, gp, id),
+            _ => {}
+        }
     }
 }
 
@@ -439,54 +441,69 @@ fn clip_grad_l2(gp: &mut GradientsParams, adapter: &Adapter, max_norm: f64, devi
     if max_norm <= 0.0 {
         return 0.0;
     }
-    let (w_id, b_id) = adapter.param_ids();
+    // Tổng bình phương mọi phần tử gradient của mọi tensor học (linear + TCN blocks).
     let mut total_sq: f64 = 0.0;
-
-    if let Some(g) = gp.remove::<2>(w_id) {
-        // clone() rẻ (share Arc dữ liệu) — cần giữ g để re-register sau khi tính norm.
-        let v: f64 = g
-            .clone()
-            .square()
-            .sum()
-            .try_into_scalar::<f32>()
-            .unwrap_or(f32::NAN) as f64;
+    for (id, rank) in adapter.param_ids() {
+        let v: f64 = match rank {
+            2 => gp
+                .remove::<2>(id)
+                .map(|g| {
+                    let v = g
+                        .clone()
+                        .square()
+                        .sum()
+                        .try_into_scalar::<f32>()
+                        .unwrap_or(f32::NAN) as f64;
+                    gp.register(id, g);
+                    v
+                })
+                .unwrap_or(0.0),
+            1 => gp
+                .remove::<1>(id)
+                .map(|g| {
+                    let v = g
+                        .clone()
+                        .square()
+                        .sum()
+                        .try_into_scalar::<f32>()
+                        .unwrap_or(f32::NAN) as f64;
+                    gp.register(id, g);
+                    v
+                })
+                .unwrap_or(0.0),
+            _ => 0.0,
+        };
         total_sq += v;
-        gp.register(w_id, g);
-    }
-    if let Some(b_id) = b_id {
-        if let Some(g) = gp.remove::<1>(b_id) {
-            let v: f64 = g
-                .clone()
-                .square()
-                .sum()
-                .try_into_scalar::<f32>()
-                .unwrap_or(f32::NAN) as f64;
-            total_sq += v;
-            gp.register(b_id, g);
-        }
     }
 
     let norm = total_sq.sqrt();
     if norm.is_finite() && norm > max_norm {
         let scale = max_norm as f64 / norm;
-        if let Some(g) = gp.remove::<2>(w_id) {
-            let dims = g.dims();
-            let len: usize = dims.iter().product();
-            let scale_t = Tensor::<2>::from_data(
-                TensorData::new(vec![scale as f32; len], dims),
-                device,
-            );
-            gp.register(w_id, g * scale_t);
-        }
-        if let Some(b_id) = b_id {
-            if let Some(g) = gp.remove::<1>(b_id) {
-                let dims = g.dims();
-                let len: usize = dims.iter().product();
-                let scale_t = Tensor::<1>::from_data(
-                    TensorData::new(vec![scale as f32; len], dims),
-                    device,
-                );
-                gp.register(b_id, g * scale_t);
+        for (id, rank) in adapter.param_ids() {
+            match rank {
+                2 => {
+                    if let Some(g) = gp.remove::<2>(id) {
+                        let dims = g.dims();
+                        let len: usize = dims.iter().product();
+                        let scale_t = Tensor::<2>::from_data(
+                            TensorData::new(vec![scale as f32; len], dims),
+                            device,
+                        );
+                        gp.register(id, g * scale_t);
+                    }
+                }
+                1 => {
+                    if let Some(g) = gp.remove::<1>(id) {
+                        let dims = g.dims();
+                        let len: usize = dims.iter().product();
+                        let scale_t = Tensor::<1>::from_data(
+                            TensorData::new(vec![scale as f32; len], dims),
+                            device,
+                        );
+                        gp.register(id, g * scale_t);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -698,7 +715,9 @@ mod tests {
     fn clip_grad_l2_scales_and_returns_norm() {
         let device = Device::flex();
         let adapter = Adapter::new(&device);
-        let (w_id, b_id) = adapter.param_ids();
+        // param_ids[0] = linear.weight (rank 2), [1] = linear.bias (rank 1)
+        let w_id = adapter.param_ids()[0].0;
+        let b_id = adapter.param_ids()[1].0;
         let mut gp = GradientsParams::new();
         // weight [[3,4],[0,0]] → norm² 25; bias [1,0] → norm² 1; tổng norm = sqrt(26)
         gp.register(
@@ -709,7 +728,7 @@ mod tests {
             ),
         );
         gp.register(
-            b_id.unwrap(),
+            b_id,
             Tensor::<1>::from_data(TensorData::new(vec![1.0f32, 0.0], [2]), &device),
         );
         let norm = clip_grad_l2(&mut gp, &adapter, 1.0, &device);
@@ -721,7 +740,7 @@ mod tests {
         let n = (26.0f64).sqrt() as f32;
         assert!((wv[0] - 3.0 / n).abs() < 1e-4, "w0 = {}", wv[0]);
         assert!((wv[1] - 4.0 / n).abs() < 1e-4, "w1 = {}", wv[1]);
-        let b = gp.remove::<1>(b_id.unwrap()).unwrap();
+        let b = gp.remove::<1>(b_id).unwrap();
         let bv = b.into_data().as_slice::<f32>().unwrap().to_vec();
         assert!((bv[0] - 1.0 / n).abs() < 1e-4, "b0 = {}", bv[0]);
     }
@@ -730,7 +749,7 @@ mod tests {
     fn clip_grad_l2_disabled_when_max_norm_zero() {
         let device = Device::flex();
         let adapter = Adapter::new(&device);
-        let (w_id, _) = adapter.param_ids();
+        let w_id = adapter.param_ids()[0].0;
         let mut gp = GradientsParams::new();
         gp.register(
             w_id,
