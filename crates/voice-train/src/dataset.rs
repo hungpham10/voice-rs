@@ -105,18 +105,38 @@ impl Dataset {
                 }
             };
 
-            let (shape, flat) = voice_vits::npy::read_f32(Path::new(&e.feats_path))?;
+            let (shape, mut flat) = voice_vits::npy::read_f32(Path::new(&e.feats_path))?;
             if shape.len() != 3 || shape[0] != 1 {
                 return Err(format!("features {} phải [1,T,C], được {shape:?}", e.feats_path).into());
             }
             let (t_h, c) = (shape[1], shape[2]);
+            // Sanitize: NaN/Inf có thể điểm lửa loss NaN chảy xuống forward chỉ vì
+            // một frame (đo được trên VIVOS: Hubert của khung im lặng). Thay 0.0.
+            let non_finite_feats = flat.iter().filter(|v| !v.is_finite()).count();
+            if non_finite_feats > 0 {
+                eprintln!("⚠️  {} frame feats NaN/Inf → thay 0.0", non_finite_feats);
+            }
+            for v in flat.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
 
             let (wav, sr) = crate::data::read_wav_mono(Path::new(&e.wav_path))?;
-            let wav = voice_lib::vc::resample_linear(&wav, sr, 22050);
+            let mut wav = voice_lib::vc::resample_linear(&wav, sr, 22050);
+            let non_finite_wav = wav.iter().filter(|v| !v.is_finite()).count();
+            if non_finite_wav > 0 {
+                eprintln!("⚠️  {} mẫu wav NaN/Inf → thay 0.0", non_finite_wav);
+            }
+            for v in wav.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
 
             // f0 co-location: feats_path ".npy" → ".f0.npy" (CSV hợp đồng không đổi)
             let f0_path = Path::new(&e.feats_path).with_extension("f0.npy");
-            let f0 = if f0_path.exists() {
+            let mut f0 = if f0_path.exists() {
                 let (shape, flat) = voice_vits::npy::read_f32(&f0_path)?;
                 let _t_f0 = match shape.as_slice() {
                     [1, t] => *t,
@@ -131,6 +151,18 @@ impl Dataset {
             } else {
                 None
             };
+            // f0 RMVPE có thể trả NaN frame vô thanh → thay 0 (coi như unvoiced).
+            if let Some(f0) = &mut f0 {
+                let bad = f0.iter().filter(|v| !v.is_finite()).count();
+                if bad > 0 {
+                    eprintln!("⚠️  {} mẫu f0 NaN/Inf → 0 (unvoiced)", bad);
+                }
+                for v in f0.iter_mut() {
+                    if !v.is_finite() {
+                        *v = 0.0;
+                    }
+                }
+            }
 
             utts.push(Utterance {
                 speaker: spk,
