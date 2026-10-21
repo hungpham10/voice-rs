@@ -38,6 +38,10 @@ pub struct TrainConfig {
     pub grad_accum: usize,
     pub steps: usize,
     pub lr: f64,
+    /// Các bước đầu lr tuyến tính 0 → lr (chuẩn Adam để tránh blowup bước đầu).
+    pub warmup: usize,
+    /// Cắt gradient toàn cục nếu L2 norm vượt quá này (0 = tắt).
+    pub clip_norm: f64,
     /// Cứ bao nhiêu bước đo val một lần.
     pub val_every: usize,
     pub seed: u64,
@@ -196,6 +200,8 @@ pub fn run_training(
         let mut lv_sum = 0f64;
         let mut nan_skips = 0usize; // số micro-batch bị bỏ vì loss NaN
         const MAX_NAN: usize = 10;  // quá nhiều bước liên tục NaN → coi như diverge
+        let mut gn_ema = 0f64;      // EMA chuẩn L2 gradient (phát hiện blowup sớm)
+        let mut micro_utts: Vec<(String, usize)> = Vec::with_capacity(cfg.batch); // (utt_id, offset_lat)
 
         for _micro in 0..accum {
             // ---- Xếp micro-batch. Chunk có độ dài biến động (plan_chunks Applio:
@@ -212,6 +218,10 @@ pub fn run_training(
                 let list = &per_spk_chunks[spk];
                 let k = list[rng.below(list.len())];
                 let chunk = &train_ds.chunks[k];
+                micro_utts.push((
+                    train_ds.utts[chunk.utt].utt_id.clone(),
+                    chunk.offset_lat,
+                ));
                 let t_chunk = train_ds.latent_len(k).min(chunk_frames);
                 real_latents[i] = t_chunk;
 
@@ -283,10 +293,20 @@ pub fn run_training(
             // Luôn gọi backward() — kể cả khi NaN — để burn giải phóng graph.
             // Không backward ⇒ tensor trung gian lưu trong queue CUDA → VRAM cạn dần.
             let mut grads = GradientsParams::from_grads(loss.backward(), &adapter);
+            // Cắt gradient toàn cục nếu L2 norm vượt cfg.clip_norm (chống blowup Adam).
+            let gn = clip_grad_l2(&mut grads, &adapter, cfg.clip_norm, &device);
+            if gn.is_finite() {
+                gn_ema = gn_ema * 0.9 + gn * 0.1;
+            }
             if !lv.is_finite() {
                 nan_skips += 1;
+                let utts: String = micro_utts
+                    .iter()
+                    .map(|(u, o)| format!("{u}@{o}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 eprintln!(
-                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (nan-skip {}/{MAX_NAN})",
+                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (nan-skip {}/{MAX_NAN}) gn={gn:.2} utts=[{utts}]",
                     step + 1,
                     _micro + 1,
                     accum,
@@ -318,7 +338,8 @@ pub fn run_training(
         last = lv;
 
         if n_valid > 0 {
-            adapter = optim.step(cfg.lr, adapter, cum);
+            let lr_now = lr_at(step, cfg.steps, cfg.warmup, cfg.lr);
+            adapter = optim.step(lr_now, adapter, cum);
         } else {
             eprintln!("step {:>4} toàn bộ micro-batch NaN → bỏ optimizer step", step + 1);
         }
@@ -342,16 +363,19 @@ pub fn run_training(
                 best_adapter = adapter.clone();
             }
             println!(
-                "step {:>4}  train mel-L1 = {lv:.5}  val = {:.5}{}{}",
+                "step {:>4}  train mel-L1 = {:.5}  val = {:.5}{}{}  gn={:.2}{}",
                 step + 1,
+                lv,
                 report.mean_mel_l1,
                 if improved { "  ← tốt nhất" } else { "" },
-                mem_line()
+                mem_line(),
+                gn_ema,
+                if gn_ema > cfg.clip_norm * 0.5 { " ⚠grad-norm cao" } else { "" }
             );
             Some(report.mean_mel_l1)
         } else {
             if step % 25 == 0 || step + 1 == cfg.steps {
-                println!("step {:>4}  train mel-L1 = {lv:.5}{}", step + 1, mem_line());
+                println!("step {:>4}  train mel-L1 = {lv:.5}  gn={gn_ema:.2}{}", step + 1, mem_line());
             }
             None
         };
@@ -406,6 +430,81 @@ fn add_grad<const R: usize>(
         (Some(a), None) => cum.register(id, a),
         (None, None) => {}
     }
+}
+
+/// Cắt gradient toàn cục (global L2 norm): nếu norm > max_norm scale mọi tensor
+/// về (max_norm / norm). Trả về norm trước khi cắt (hoặc 0 nếu tắt) để log.
+/// NaN norm ⇒ không cắt, gọi biến caller sẽ nhận biết qua `lv.is_finite()`.
+fn clip_grad_l2(gp: &mut GradientsParams, adapter: &Adapter, max_norm: f64, device: &Device) -> f64 {
+    if max_norm <= 0.0 {
+        return 0.0;
+    }
+    let (w_id, b_id) = adapter.param_ids();
+    let mut total_sq: f64 = 0.0;
+
+    if let Some(g) = gp.remove::<2>(w_id) {
+        // clone() rẻ (share Arc dữ liệu) — cần giữ g để re-register sau khi tính norm.
+        let v: f64 = g
+            .clone()
+            .square()
+            .sum()
+            .try_into_scalar::<f32>()
+            .unwrap_or(f32::NAN) as f64;
+        total_sq += v;
+        gp.register(w_id, g);
+    }
+    if let Some(b_id) = b_id {
+        if let Some(g) = gp.remove::<1>(b_id) {
+            let v: f64 = g
+                .clone()
+                .square()
+                .sum()
+                .try_into_scalar::<f32>()
+                .unwrap_or(f32::NAN) as f64;
+            total_sq += v;
+            gp.register(b_id, g);
+        }
+    }
+
+    let norm = total_sq.sqrt();
+    if norm.is_finite() && norm > max_norm {
+        let scale = max_norm as f64 / norm;
+        if let Some(g) = gp.remove::<2>(w_id) {
+            let dims = g.dims();
+            let len: usize = dims.iter().product();
+            let scale_t = Tensor::<2>::from_data(
+                TensorData::new(vec![scale as f32; len], dims),
+                device,
+            );
+            gp.register(w_id, g * scale_t);
+        }
+        if let Some(b_id) = b_id {
+            if let Some(g) = gp.remove::<1>(b_id) {
+                let dims = g.dims();
+                let len: usize = dims.iter().product();
+                let scale_t = Tensor::<1>::from_data(
+                    TensorData::new(vec![scale as f32; len], dims),
+                    device,
+                );
+                gp.register(b_id, g * scale_t);
+            }
+        }
+    }
+    norm
+}
+
+/// Adam lr với warmup tuyến tính (0 → base trong `warmup` bước) rồi cosine decay
+/// xuống 10% `base` tại bước cuối (tinh thần RVC/Applio, tránh blowup hết_epoch).
+fn lr_at(step: usize, total: usize, warmup: usize, base: f64) -> f64 {
+    if warmup > 0 && step < warmup {
+        return base * (step + 1) as f64 / warmup as f64;
+    }
+    let remaining = total.saturating_sub(warmup);
+    if remaining == 0 || step >= total {
+        return base * 0.1;
+    }
+    let progress = (step - warmup) as f64 / remaining as f64;
+    base * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos()))
 }
 
 /// RSS + peak (VmHWM) của process tính GB, đọc `/proc/self/status`.
@@ -540,9 +639,11 @@ mod tests {
             batch: 2,
             grad_accum: 1,
             steps: 5,
-            lr: 1e-3,
+            lr: 1e-4,
             val_every: 5,
             seed: 42,
+            warmup: 100,
+            clip_norm: 1.0,
             checkpoint_every: 0,
             nsf: false,
         };
@@ -574,5 +675,75 @@ mod tests {
         // 5 câu dài → 5 chunks (câu ngắn bị bỏ)
         assert_eq!(metrics.len(), 5, "chỉ chunk dài được giữ");
         assert!(metrics.iter().all(|m| m.mel_l1.is_finite()));
+    }
+
+    #[test]
+    fn lr_at_warmup_then_cosine() {
+        let base = 1e-4;
+        // warmup: step 0 → base/warmup (1e-6), cuối warmup → base
+        assert!((lr_at(0, 1000, 100, base) - base / 100.0).abs() < 1e-12);
+        assert!((lr_at(99, 1000, 100, base) - base).abs() < 1e-12);
+        // bước đầu sau warmup vẫn ≈ base (cos(0) = 1)
+        assert!((lr_at(100, 1000, 100, base) - base).abs() < 1e-12);
+        // giữa đường cos nằm trong (0.1·base, base)
+        let mid = lr_at(500, 1000, 100, base);
+        assert!(mid > base * 0.1 && mid < base);
+        // cuối = 0.1·base
+        assert!((lr_at(999, 1000, 100, base) - base * 0.1).abs() < 1e-9);
+        // warmup = 0 → luôn base (trừ bước cuối epoch)
+        assert!((lr_at(0, 100, 0, base) - base).abs() < 1e-12);
+    }
+
+    #[test]
+    fn clip_grad_l2_scales_and_returns_norm() {
+        let device = Device::flex();
+        let adapter = Adapter::new(&device);
+        let (w_id, b_id) = adapter.param_ids();
+        let mut gp = GradientsParams::new();
+        // weight [[3,4],[0,0]] → norm² 25; bias [1,0] → norm² 1; tổng norm = sqrt(26)
+        gp.register(
+            w_id,
+            Tensor::<2>::from_data(
+                TensorData::new(vec![3.0f32, 4.0, 0.0, 0.0], [2, 2]),
+                &device,
+            ),
+        );
+        gp.register(
+            b_id.unwrap(),
+            Tensor::<1>::from_data(TensorData::new(vec![1.0f32, 0.0], [2]), &device),
+        );
+        let norm = clip_grad_l2(&mut gp, &adapter, 1.0, &device);
+        assert!((norm - (26.0f64).sqrt()).abs() < 1e-5, "norm = {norm}");
+
+        // sau clip: mỗi tensor chia norm → tổng norm mới = 1.0
+        let w = gp.remove::<2>(w_id).unwrap();
+        let wv = w.into_data().as_slice::<f32>().unwrap().to_vec();
+        let n = (26.0f64).sqrt() as f32;
+        assert!((wv[0] - 3.0 / n).abs() < 1e-4, "w0 = {}", wv[0]);
+        assert!((wv[1] - 4.0 / n).abs() < 1e-4, "w1 = {}", wv[1]);
+        let b = gp.remove::<1>(b_id.unwrap()).unwrap();
+        let bv = b.into_data().as_slice::<f32>().unwrap().to_vec();
+        assert!((bv[0] - 1.0 / n).abs() < 1e-4, "b0 = {}", bv[0]);
+    }
+
+    #[test]
+    fn clip_grad_l2_disabled_when_max_norm_zero() {
+        let device = Device::flex();
+        let adapter = Adapter::new(&device);
+        let (w_id, _) = adapter.param_ids();
+        let mut gp = GradientsParams::new();
+        gp.register(
+            w_id,
+            Tensor::<2>::from_data(
+                TensorData::new(vec![10.0f32, 0.0, 0.0, 0.0], [2, 2]),
+                &device,
+            ),
+        );
+        let norm = clip_grad_l2(&mut gp, &adapter, 0.0, &device);
+        assert_eq!(norm, 0.0, "clip tắt phải trả 0");
+        // tensor không bị thay đổi
+        let w = gp.remove::<2>(w_id).unwrap();
+        let wv = w.into_data().as_slice::<f32>().unwrap().to_vec();
+        assert_eq!(wv, vec![10.0f32, 0.0, 0.0, 0.0]);
     }
 }

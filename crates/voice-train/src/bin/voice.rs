@@ -171,6 +171,12 @@ struct TrainArgs {
     steps: usize,
     #[arg(long, default_value_t = 1e-4)]
     lr: f64,
+    /// Các bước đầu lr tuyến tính 0 → lr (chuẩn Adam để tránh blowup bước đầu).
+    #[arg(long, default_value_t = 100)]
+    warmup: usize,
+    /// Cắt gradient toàn cục nếu L2 norm vượt quá này (0 = tắt).
+    #[arg(long, default_value_t = 1.0)]
+    clip_norm: f64,
     /// Cứ bao nhiêu bước đo val một lần.
     #[arg(long, default_value_t = 50)]
     val_every: usize,
@@ -421,6 +427,8 @@ fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         grad_accum: a.grad_accum,
         steps: a.steps,
         lr: a.lr,
+        warmup: a.warmup,
+        clip_norm: a.clip_norm,
         val_every: a.val_every,
         seed: a.seed,
         checkpoint_every: a.checkpoint_every,
