@@ -274,11 +274,19 @@ pub fn run_training(
             let mask = Tensor::<2>::from_data(TensorData::new(mask_host, [b, mask_frames]), &device);
             let loss = mel::mel_l1_masked(wav, target, &mel_cfg, &basis, &mask);
 
-            let lv: f64 = loss.clone().into_scalar::<f32>() as f64;
+            // Đọc scalar bằng try_into_scalar (không panic khi kernel lỗi).
+            let lv: f64 = loss
+                .clone()
+                .try_into_scalar::<f32>()
+                .map(|v| v as f64)
+                .unwrap_or(f64::NAN);
+            // Luôn gọi backward() — kể cả khi NaN — để burn giải phóng graph.
+            // Không backward ⇒ tensor trung gian lưu trong queue CUDA → VRAM cạn dần.
+            let mut grads = GradientsParams::from_grads(loss.backward(), &adapter);
             if !lv.is_finite() {
                 nan_skips += 1;
                 eprintln!(
-                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ bước này (nan-skip {}/{MAX_NAN})",
+                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (nan-skip {}/{MAX_NAN})",
                     step + 1,
                     _micro + 1,
                     accum,
@@ -294,7 +302,6 @@ pub fn run_training(
                 continue;
             }
             lv_sum += lv;
-            let mut grads = GradientsParams::from_grads(loss.backward(), &adapter);
             // Cộng dồn gradients micro-batch vào `cum` (theo param id).
             merge_into(&mut cum, &mut grads, &adapter);
         }

@@ -29,7 +29,7 @@ ACCUM="${ACCUM:-4}"
 # VAL_EVERY=0 → tắt val hoàn toàn (train liên tục, không tốn VRAM eval)
 VAL_EVERY="${VAL_EVERY:-50}"
 STEPS="${STEPS:-1500}"
-LR="${LR:-1e-3}"
+LR="${LR:-1e-4}"
 DEVICE="${DEVICE:-cpu}"
 BIN_DIR="${BIN_DIR:-bin}"
 
