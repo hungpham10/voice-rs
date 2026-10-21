@@ -89,8 +89,13 @@ pub fn mel_l1_masked(
     // mask [B, F] → [B, F, 1] broadcast nhân vào mel [B, F, n_mels].
     let [mb, mf] = mask.dims();
     let m = mask.clone().reshape([mb, mf, 1]);
+    // KHUYẾN CẢO: den phải chia cho TẤT CẢ phần tử mà num đã cộng (B×F×n_mels),
+    // không chỉ số frame (B×F) — nếu không loss sẽ bị phóng đại ~80×
+    // (số n_mels) và học lên NaN (khác ma trận Applio: họ crop đều → không mask,
+    // vậy không gặp bẫy divisor này).
     let num = (a - b).abs().mul(m).sum();
-    let den = mask.clone().sum();
+    let n_mels = cfg.n_mels as f32;
+    let den = mask.clone().sum() * n_mels;
     num.div(den)
 }
 
@@ -202,6 +207,34 @@ mod tests {
         // đối chứng: không mask thì khác 0 rõ
         let l_all: f32 = mel_l1(gen_t, tgt_t, &cfg, &basis).into_scalar();
         assert!(l_all > 0.1, "không mask phải thấy phần pad, got {l_all}");
+    }
+
+    /// Full mask (mọi frame = 1) → masked loss phải bằng chính xác loss không mask,
+    //  vì den giờ có nhân n_mels (không còn sai ~80× gây NaN).
+    #[test]
+    fn mel_l1_masked_full_mask_equals_plain() {
+        let device = Device::flex();
+        let cfg = MelConfig::ljs();
+        let basis = mel_basis(&cfg, &device);
+
+        let x = sine(8192, 22050.0);
+        let y = (0..8192usize).map(|i| {
+            let t = i as f32 / 22050.0;
+            (2.0 * core::f32::consts::PI * 330.0 * t).sin() * 0.4
+        }).collect::<Vec<_>>();
+        let x_t = Tensor::<2>::from_data(TensorData::new(x, [1, 8192]), &device);
+        let y_t = Tensor::<2>::from_data(TensorData::new(y, [1, 8192]), &device);
+
+        // full mask đủ số frame mel của audio 8192 mẫu
+        let probe = log_mel(x_t.clone(), &cfg, &basis);
+        let [_, f, _] = probe.dims();
+        let mask = Tensor::<2>::from_data(TensorData::new(vec![1.0f32; f], [1, f]), &device);
+
+        let l_masked: f32 = mel_l1_masked(x_t.clone(), y_t.clone(), &cfg, &basis, &mask).into_scalar();
+        let l_plain: f32 = mel_l1(x_t, y_t, &cfg, &basis).into_scalar();
+        assert!((l_masked - l_plain).abs() < 1e-5,
+                "full mask phải bằng plain: masked={l_masked} plain={l_plain}");
+        assert!(l_masked > 0.1, "âm khác nhau phải có loss rõ ràng, got {l_masked}");
     }
 
     /// Gradient qua STFT/`log` phải finite (chặn bẫy NaN §8.2) và khác 0.
