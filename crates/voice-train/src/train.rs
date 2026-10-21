@@ -194,6 +194,8 @@ pub fn run_training(
         // Memory chỉ theo `batch` (1 micro-batch), effective batch = batch × accum.
         let mut cum = GradientsParams::new();
         let mut lv_sum = 0f64;
+        let mut nan_skips = 0usize; // số micro-batch bị bỏ vì loss NaN
+        const MAX_NAN: usize = 10;  // quá nhiều bước liên tục NaN → coi như diverge
 
         for _micro in 0..accum {
             // ---- Xếp micro-batch. Chunk có độ dài biến động (plan_chunks Applio:
@@ -272,18 +274,47 @@ pub fn run_training(
             let mask = Tensor::<2>::from_data(TensorData::new(mask_host, [b, mask_frames]), &device);
             let loss = mel::mel_l1_masked(wav, target, &mel_cfg, &basis, &mask);
 
-            lv_sum += loss.clone().into_scalar::<f32>() as f64;
+            let lv: f64 = loss.clone().into_scalar::<f32>() as f64;
+            if !lv.is_finite() {
+                nan_skips += 1;
+                eprintln!(
+                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ bước này (nan-skip {}/{MAX_NAN})",
+                    step + 1,
+                    _micro + 1,
+                    accum,
+                    nan_skips
+                );
+                if nan_skips >= MAX_NAN {
+                    return Err(format!(
+                        "train diverge: loss NaN liên tục sau {MAX_NAN} micro-batch (lr={} quá cao hoặc dữ liệu cần kiểm tra), dừng sớm",
+                        cfg.lr
+                    )
+                    .into());
+                }
+                continue;
+            }
+            lv_sum += lv;
             let mut grads = GradientsParams::from_grads(loss.backward(), &adapter);
             // Cộng dồn gradients micro-batch vào `cum` (theo param id).
             merge_into(&mut cum, &mut grads, &adapter);
         }
-        let lv = lv_sum / accum as f64;
+
+        let n_valid = accum - nan_skips;
+        let lv = if n_valid > 0 {
+            lv_sum / n_valid as f64
+        } else {
+            f64::NAN
+        };
         if step == 0 {
             first = lv;
         }
         last = lv;
 
-        adapter = optim.step(cfg.lr, adapter, cum);
+        if n_valid > 0 {
+            adapter = optim.step(cfg.lr, adapter, cum);
+        } else {
+            eprintln!("step {:>4} toàn bộ micro-batch NaN → bỏ optimizer step", step + 1);
+        }
 
         if let Some(path) = &checkpoint_path {
             if (step + 1) % cfg.checkpoint_every == 0 {
