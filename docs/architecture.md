@@ -1344,8 +1344,11 @@ gradient qua N micro-batch → effective batch = `batch × N` nhưng **memory ch
 Burn 0.22 `GradientsParams` không có `merge` — cộng tay theo param id (weight rank 2,
 bias rank 1).
 
-**Single device (v2.2.18):** train + eval dùng chung một device (`Adapter::valid()`
-mode cho forward eval); bỏ path `device_eval` Flex CPU riêng của v2.2.16/17.
+**Single device (v2.2.18, sửa v2.2.20):** train + eval dùng chung một device; nhưng
+eval là **forward-only** — `z.detach()` trong `per_utt_metrics` gỡ autodiff tracking
+trước `gen.forward` (v2.2.18/19 để `z` mang grad → burn dựng graph 200 layer mỗi
+val chunk không backward giải phóng → OOM VRAM). `VAL_EVERY=0` / `--val-every 0`
+tắt val: khi đó `adapter_best.bpk` = bản train cuối (không phải init random).
 
 **Log memory** (Linux): mỗi bước val/25 bước in `· RSS=x.xGB PEAK=x.xGB` (đọc
 `/proc/self/status`: `VmRSS`, `VmHWM` — peak lịch sử của process) → chẩn đoán OOM
