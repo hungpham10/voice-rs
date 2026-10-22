@@ -21,7 +21,7 @@
 
 use burn::module::{Module, ParamId};
 use burn::nn::conv::{Conv1d, Conv1dConfig};
-use burn::nn::{Initializer, Linear, LinearConfig, PaddingConfig1d};
+use burn::nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, PaddingConfig1d};
 use burn::tensor::{activation, Device, Float, Int, Tensor};
 
 use super::resample::nearest_index_map;
@@ -62,9 +62,11 @@ impl ResBlock {
 pub const IN_DIM: usize = 768;
 /// `dec` latent width = `initial_channel` = input channels of `conv_pre`.
 pub const OUT_DIM: usize = 192;
-/// Dilations của 3 block residual — trường fühl tinh thần `TextEncoder` của Applio
+/// Dilations của 3 block residual — tinh thần `TextEncoder` của Applio
 /// (linear chiếu trước, stack convolution sau để có ngữ cảnh thời gian).
 const TCN_DILATIONS: [usize; 3] = [1, 2, 4];
+/// Số bin pitch embedding — đúng `Embedding(256, hidden)` của Applio (encoders.py:121).
+pub const PITCH_BINS: usize = 256;
 
 #[derive(Module, Debug)]
 pub struct Adapter {
@@ -72,6 +74,9 @@ pub struct Adapter {
     block1: ResBlock,
     block2: ResBlock,
     block3: ResBlock,
+    /// Pitch embedding 256 bin → out_dim, zero-init, cộng vào z trước TCN
+    /// (tương đương `x += emb_pitch(pitch)` của Applio). `forward_to` không dùng.
+    pitch_emb: Embedding,
 }
 
 impl Adapter {
@@ -86,11 +91,15 @@ impl Adapter {
         let block1 = ResBlock::new(out_dim, TCN_DILATIONS[0], device);
         let block2 = ResBlock::new(out_dim, TCN_DILATIONS[1], device);
         let block3 = ResBlock::new(out_dim, TCN_DILATIONS[2], device);
+        let pitch_emb = EmbeddingConfig::new(PITCH_BINS, out_dim)
+            .with_initializer(Initializer::Zeros)
+            .init(device);
         Self {
             linear,
             block1,
             block2,
             block3,
+            pitch_emb,
         }
     }
 
@@ -98,6 +107,18 @@ impl Adapter {
     ///
     /// `t_out` is the target latent length, supplied from outside (§14.4).
     pub fn forward_to(&self, feats: Tensor<3, Float>, t_out: usize) -> Tensor<3, Float> {
+        self.forward_to_pitch(feats, t_out, None)
+    }
+
+    /// Như `forward_to` + pitch embedding (`f0_bins: [1, t_out]`, giá trị 0..255)
+    /// cộng vào z trước TCN — đối chiếu `x += emb_pitch(pitch)` của Applio.
+    /// `None` ⇒ y hệt `forward_to`.
+    pub fn forward_to_pitch(
+        &self,
+        feats: Tensor<3, Float>,
+        t_out: usize,
+        f0_bins: Option<Tensor<2, Int>>,
+    ) -> Tensor<3, Float> {
         let [_, in_dim, t_in] = feats.dims();
         debug_assert_eq!(in_dim, self.in_dim(), "adapter input width mismatch");
         assert!(t_in > 0 && t_out > 0, "empty feature/latent sequence");
@@ -113,6 +134,16 @@ impl Adapter {
 
         // Linear projects the last dim: [1, in_dim, t_out] -> [1, t_out, in_dim] -> [1, out_dim, t_out].
         let mut z = self.linear.forward(up.swap_dims(1, 2)).swap_dims(1, 2);
+
+        // Pitch embedding: bins [1, t_out] → emb [1, t_out, out_dim] → [1, out_dim, t_out]
+        // cộng vào z (Applio cộng pitch trước encoder context — cùng thứ tự).
+        if let Some(bins) = f0_bins {
+            debug_assert_eq!(bins.dims()[0], z.dims()[0], "f0 bins phải batch bằng feats");
+            debug_assert_eq!(bins.dims()[1], t_out, "f0 bins phải khớp t_out");
+            let e = self.pitch_emb.forward(bins).swap_dims(1, 2);
+            z = z + e;
+        }
+
         // residual TCN thêm ngữ cảnh thời gian (tinh thần TextEncoder của Applio:
         // linear chiếu trước, conv-stack sau). Blocks bắt đầu bằng 0 ⇒ z đầu tiên yệt hẹp từ linear.
         z = self.block1.forward(z);
@@ -143,6 +174,9 @@ impl Adapter {
                 ids.push((bi.id, 1));
             }
         }
+        // Pitch embedding (chỉ có weight, không bias). Khi không dùng pitch,
+        // của nó không có grad — `merge_into` bỏ qua id không xuất hiện.
+        ids.push((self.pitch_emb.weight.id, 2));
         ids
     }
 
@@ -278,13 +312,44 @@ mod tests {
     fn tcn_param_ids_cover_linear_and_blocks() {
         let a = Adapter::new(&device());
         let ids = a.param_ids();
-        // linear (weight+bias) + 3 block × 2 conv × (weight+bias) = 2 + 12 = 14
+        // linear (weight+bias) + 3 block × 2 conv × (weight+bias) + pitch_emb = 2 + 12 + 1 = 15
         assert_eq!(
             ids.len(),
-            14,
-            "param_ids phải bao gồm linear + TCN blocks: {ids:?}"
+            15,
+            "param_ids phải bao gồm linear + TCN blocks + pitch_emb: {ids:?}"
         );
         assert!(ids.iter().all(|(_, r)| *r == 1 || *r == 2));
+    }
+
+    #[test]
+    fn pitch_embed_none_matches_plain() {
+        let a = Adapter::new(&device());
+        let feats = ramp(IN_DIM, 17);
+        let z0 = a.forward_to(feats.clone(), 29);
+        let z1 = a.forward_to_pitch(feats, 29, None);
+        assert_eq!(z0.into_data().as_slice::<f32>().unwrap(), z1.into_data().as_slice::<f32>().unwrap());
+    }
+
+    #[test]
+    fn pitch_bins_change_output_and_zero_init_identity() {
+        // Zero-init embedding ⇒ cùng với conv2 zero-init, forward_to_pitch
+        // đầu tiên phải ra đúng z của linear thuần, bất kể bins gì.
+        let a = Adapter::new(&device());
+        assert_eq!(
+            a.pitch_emb.weight.val().dims(),
+            [PITCH_BINS, OUT_DIM],
+            "embedding phải [256, out_dim]"
+        );
+        let feats = ramp(IN_DIM, 9);
+        let z_plain = a.forward_to(feats.clone(), 13);
+        let bins: Vec<i64> = (0..13).map(|t| (t * 19 + 7) % 256).collect();
+        let bins = Tensor::<1, Int>::from_ints(bins.as_slice(), &device()).reshape([1, 13]);
+        let z_pitch = a.forward_to_pitch(feats, 13, Some(bins));
+        assert_eq!(
+            z_plain.into_data().as_slice::<f32>().unwrap(),
+            z_pitch.into_data().as_slice::<f32>().unwrap(),
+            "embedding zero-init phải là no-op lúc đầu"
+        );
     }
 
     #[test]

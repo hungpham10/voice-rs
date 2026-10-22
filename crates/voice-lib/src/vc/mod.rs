@@ -9,5 +9,5 @@
 mod adapter;
 mod resample;
 
-pub use adapter::{Adapter, IN_DIM, OUT_DIM};
+pub use adapter::{Adapter, IN_DIM, OUT_DIM, PITCH_BINS};
 pub use resample::{nearest_index_map, resample_linear};

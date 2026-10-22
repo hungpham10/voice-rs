@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use burn::module::Module;
 use burn::optim::{AdamConfig, GradientsParams};
-use burn::tensor::{Device, Tensor, TensorData};
+use burn::tensor::{Device, Int, Tensor, TensorData};
 use voice_lib::vc::{Adapter, nearest_index_map};
 use voice_mel::MelConfig;
 use voice_vits::dec::Generator;
@@ -50,6 +50,9 @@ pub struct TrainConfig {
     /// Bật NSF-lite: unfreeze `conv_src` và bơm excitation từ f0 sau `conv_pre`.
     /// Yêu cầu bundle dec có `conv_src.npy` và mỗi câu có `.f0.npy` co-location.
     pub nsf: bool,
+    /// Phase 3: pitch-embed — f0 quantize 256 bin → Embedding cộng vào z trước
+    /// TCN (Applio `emb_pitch`). Yêu cầu `.f0.npy` co-location cho mỗi câu.
+    pub pitch_embed: bool,
 }
 
 /// Kết quả huấn luyện.
@@ -144,8 +147,26 @@ pub fn run_training(
         }
     }
 
+    // Pitch-embed vẫn cần f0 cho dù không bật NSF.
+    if cfg.pitch_embed && !cfg.nsf {
+        for ds in [train_ds, val_ds] {
+            for chunk in &ds.chunks {
+                let utt = &ds.utts[chunk.utt];
+                if utt.f0.is_none() {
+                    return Err(format!(
+                        "voice train --pitch-embed: chunk {} (utt {}) thiếu features .f0.npy co-location",
+                        chunk.chunk_id, utt.utt_id
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+
     let mut adapter = Adapter::new(&device).unfreeze();
-    let params = adapter.in_dim() * adapter.out_dim() + adapter.out_dim();
+    let params = adapter.in_dim() * adapter.out_dim()
+        + adapter.out_dim()
+        + voice_lib::vc::PITCH_BINS * adapter.out_dim();
 
     println!(
         "dec (đóng băng) = {:.2} M tham số · adapter (học) = {params} tham số",
@@ -173,6 +194,9 @@ pub fn run_training(
     let mut optim = AdamConfig::new().init();
     let mut rng = Rng::new(cfg.seed);
     let mut cursor = 0usize;
+    // Số optimizer step LIÊN TỤC trong đó mọi micro-batch đều NaN
+    // (không reset mỗi bước — phát hiện diverge thật sự, không phải nhiễu).
+    let mut consec = 0usize;
 
     std::fs::create_dir_all(&cfg.out_dir)?;
     let adapter_path = cfg.out_dir.join("adapter.bpk");
@@ -199,11 +223,11 @@ pub fn run_training(
         let mut cum = GradientsParams::new();
         let mut lv_sum = 0f64;
         let mut nan_skips = 0usize; // số micro-batch bị bỏ vì loss NaN
-        const MAX_NAN: usize = 10;  // quá nhiều bước liên tục NaN → coi như diverge
         let mut gn_ema = 0f64;      // EMA chuẩn L2 gradient (phát hiện blowup sớm)
         let mut micro_utts: Vec<(String, usize)> = Vec::with_capacity(cfg.batch); // (utt_id, offset_lat)
 
         for _micro in 0..accum {
+            micro_utts.clear(); // đếm từng micro, không cộng dồn giữa các micro
             // ---- Xếp micro-batch. Chunk có độ dài biến động (plan_chunks Applio:
             // ± chunk/4) → pad 0 về chuẩn `chunk_frames` + mask frame bù loss.
             let mut feats_host: Vec<f32> = vec![0.0f32; cfg.batch * c * t_h_seg];
@@ -237,7 +261,7 @@ pub fn run_training(
                 wav_host[i * n..(i + 1) * n].copy_from_slice(&wav_seg);
 
                 // f0 của chunk này, resample từ 100 Hz (RMVPE) về frame latent (86.13 Hz)
-                if cfg.nsf {
+                if cfg.nsf || cfg.pitch_embed {
                     let f0 = train_ds.utts[chunk.utt].f0.as_ref().expect("f0 đã kiểm ở trên");
                     // f0 offset tương ứng offset_lat của chunk
                     let f0_start = ((chunk.offset_lat as f64 * 100.0 / LATENT_HZ).round() as usize)
@@ -255,6 +279,21 @@ pub fn run_training(
             let b = cfg.batch;
             let feats = Tensor::<3>::from_data(TensorData::new(feats_host, [b, c, t_h_seg]), &device);
             let target = Tensor::<2>::from_data(TensorData::new(wav_host, [b, n]), &device);
+            // Pitch bins: quantize f0 (Hz) log-cân đối 256 bin. bin 0 = unvoiced,
+            // bin 1..255 = 1 + round(64·log2(f/50)) clamp — voicing 50..~1270 Hz.
+            let f0_bins = if cfg.pitch_embed {
+                let mut bins_host: Vec<i64> = Vec::with_capacity(b * chunk_frames);
+                for i in 0..b {
+                    let f0 = &f0_host[i * chunk_frames..(i + 1) * chunk_frames];
+                    fill_f0_bins(f0, &mut bins_host);
+                }
+                Some(
+                    Tensor::<2, Int>::from_ints(bins_host.as_slice(), &device)
+                        .reshape([b, chunk_frames]),
+                )
+            } else {
+                None
+            };
             let f0_tensor = if cfg.nsf {
                 Some(Tensor::<2>::from_data(
                     TensorData::new(f0_host, [b, chunk_frames]),
@@ -279,9 +318,15 @@ pub fn run_training(
                 }
             }
 
-            let z = adapter.forward_to(feats, chunk_frames);
+            let z = if cfg.pitch_embed {
+                adapter.forward_to_pitch(feats, chunk_frames, f0_bins)
+            } else {
+                adapter.forward_to(feats, chunk_frames)
+            };
+            let z_probe = z.clone();
             let wav = gen.forward(z, f0_tensor, false).reshape([b, n]);
             let mask = Tensor::<2>::from_data(TensorData::new(mask_host, [b, mask_frames]), &device);
+            let wav_probe = wav.clone();
             let loss = mel::mel_l1_masked(wav, target, &mel_cfg, &basis, &mask);
 
             // Đọc scalar bằng try_into_scalar (không panic khi kernel lỗi).
@@ -300,25 +345,27 @@ pub fn run_training(
             }
             if !lv.is_finite() {
                 nan_skips += 1;
+                // Diagnostics: NaN đến từ đâu? zmax=NaN chỉ ra adapter weights đã
+                // bị ô nhiễm; chỉ wavmax=NaN → decoder/f0; cả hai finite → loss/mel.
+                let zmax = match z_probe.abs().max().try_into_scalar::<f32>() {
+                    Ok(v) => format!("{v:.3}"),
+                    Err(_) => "?".to_string(),
+                };
+                let wavmax = match wav_probe.abs().max().try_into_scalar::<f32>() {
+                    Ok(v) => format!("{v:.3}"),
+                    Err(_) => "?".to_string(),
+                };
                 let utts: String = micro_utts
                     .iter()
                     .map(|(u, o)| format!("{u}@{o}"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 eprintln!(
-                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (nan-skip {}/{MAX_NAN}) gn={gn:.2} utts=[{utts}]",
+                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (all-NaN-chuỗi {consec}) gn={gn:.2} zmax={zmax} wavmax={wavmax} utts=[{utts}]",
                     step + 1,
                     _micro + 1,
                     accum,
-                    nan_skips
                 );
-                if nan_skips >= MAX_NAN {
-                    return Err(format!(
-                        "train diverge: loss NaN liên tục sau {MAX_NAN} micro-batch (lr={} quá cao hoặc dữ liệu cần kiểm tra), dừng sớm",
-                        cfg.lr
-                    )
-                    .into());
-                }
                 continue;
             }
             lv_sum += lv;
@@ -338,10 +385,19 @@ pub fn run_training(
         last = lv;
 
         if n_valid > 0 {
+            consec = 0; // có ít nhất 1 micro hợp lệ → chuỗi NaN đứt
             let lr_now = lr_at(step, cfg.steps, cfg.warmup, cfg.lr);
             adapter = optim.step(lr_now, adapter, cum);
         } else {
             eprintln!("step {:>4} toàn bộ micro-batch NaN → bỏ optimizer step", step + 1);
+            consec += 1;
+            if consec >= 3 {
+                return Err(format!(
+                    "train diverge: {consec} optimizer step liên tục toàn NaN (lr={} quá cao hoặc dữ liệu cần kiểm tra), dừng sớm",
+                    cfg.lr
+                )
+                .into());
+            }
         }
 
         if let Some(path) = &checkpoint_path {
@@ -524,6 +580,22 @@ fn lr_at(step: usize, total: usize, warmup: usize, base: f64) -> f64 {
     base * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos()))
 }
 
+/// Quantize f0 (Hz) thành 256 bin log-cân đối (Phase 3 pitch-embed):
+/// `bin 0 = unvoiced (f0 ≤ 0)`, `bin 1..255 = 1 + round(64·log2(f/50))` clamp.
+/// Quãng tám = 64 bin ⇒ độ phân giải ~18.9 cents/bin ở vùng giọng nói;
+/// 50 Hz → 1, ~1271 Hz → 254. Ghi đè `out` (tự push đủ `f0.len()` phần tử).
+pub(crate) fn fill_f0_bins(f0: &[f32], out: &mut Vec<i64>) {
+    for &f in f0 {
+        let bin = if f <= 0.0 {
+            0
+        } else {
+            let b = 1.0 + 64.0 * (f as f64 / 50.0).log2();
+            (b.round().clamp(1.0, 255.0)) as i64
+        };
+        out.push(bin);
+    }
+}
+
 /// RSS + peak (VmHWM) của process tính GB, đọc `/proc/self/status`.
 /// Trả None trên nền tảng không-Linux (macOS) → dòng mem bị bỏ qua.
 #[cfg(target_os = "linux")]
@@ -663,6 +735,7 @@ mod tests {
             clip_norm: 1.0,
             checkpoint_every: 0,
             nsf: false,
+            pitch_embed: false,
         };
         let err = run_training(&train_ds, &val_ds, &cfg, &device).unwrap_err();
         assert!(
@@ -692,6 +765,26 @@ mod tests {
         // 5 câu dài → 5 chunks (câu ngắn bị bỏ)
         assert_eq!(metrics.len(), 5, "chỉ chunk dài được giữ");
         assert!(metrics.iter().all(|m| m.mel_l1.is_finite()));
+    }
+
+    #[test]
+    fn fill_f0_bins_quantizes_log_scale() {
+        let mut bins = Vec::new();
+        fill_f0_bins(&[0.0, -3.0, 50.0, 100.0, 200.0, 400.0], &mut bins);
+        // unvoiced (≤0) → bin 0
+        assert_eq!(bins[0], 0);
+        assert_eq!(bins[1], 0);
+        // mỗi nhân 2 của f0 = +64 bin: 50→1, 100→65, 200→129, 400→193
+        assert_eq!(bins[2], 1);
+        assert_eq!(bins[3], 65);
+        assert_eq!(bins[4], 129);
+        assert_eq!(bins[5], 193);
+
+        // clamp biên: cả hai đầu
+        let mut b2 = Vec::new();
+        fill_f0_bins(&[1.0, 5000.0], &mut b2);
+        assert_eq!(b2[0], 1, "f0 rất thấp clamp về bin 1");
+        assert_eq!(b2[1], 255, "f0 rất cao clamp về bin 255");
     }
 
     #[test]

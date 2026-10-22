@@ -5,6 +5,7 @@
 //!
 //! Usage:
 //! ```no_run
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use voice_hubert::{HubertEmbedder, PreprocessorConfig, NormalizeMode};
 //! use hound::WavReader;
 //!
@@ -13,6 +14,8 @@
 //! let samples: Vec<f32> = reader.samples::<i16>().map(|s| s.unwrap() as f32 / i16::MAX as f32).collect();
 //! let embeddings = embedder.forward(&samples)?;
 //! println!("Shape: {:?}", embeddings.shape());
+//! Ok(())
+//! }
 //! ```
 
 use burn::backend::Flex;

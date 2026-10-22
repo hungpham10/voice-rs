@@ -191,6 +191,9 @@ struct TrainArgs {
     /// Bật NSF-lite: unfreeze `conv_src` + bơm excitation từ f0 (yêu cầu .f0.npy).
     #[arg(long, default_value_t = false)]
     nsf: bool,
+    /// Phase 3: pitch-embed — f0 → 256 bin → Embedding cộng trước TCN (yêu cầu .f0.npy).
+    #[arg(long, default_value_t = false)]
+    pitch_embed: bool,
     #[command(flatten)]
     hub: HubArgs,
 }
@@ -433,6 +436,7 @@ fn run_train(a: TrainArgs) -> Result<ExitCode, Box<dyn std::error::Error>> {
         seed: a.seed,
         checkpoint_every: a.checkpoint_every,
         nsf: a.nsf,
+        pitch_embed: a.pitch_embed,
     };
     println!("== voice train (device {}) ==", a.device);
     let s = train::run_training(&train_ds, &val_ds, &cfg, &device)?;
