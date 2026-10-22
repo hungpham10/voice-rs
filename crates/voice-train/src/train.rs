@@ -288,7 +288,7 @@ pub fn run_training(
                     fill_f0_bins(f0, &mut bins_host);
                 }
                 Some(
-                    Tensor::<2, Int>::from_ints(bins_host.as_slice(), &device)
+                    Tensor::<1, Int>::from_ints(bins_host.as_slice(), &device)
                         .reshape([b, chunk_frames]),
                 )
             } else {
@@ -470,6 +470,7 @@ pub fn run_training(
 fn merge_into(cum: &mut GradientsParams, gp: &mut GradientsParams, adapter: &Adapter) {
     for (id, rank) in adapter.param_ids() {
         match rank {
+            3 => add_grad::<3>(cum, gp, id),
             2 => add_grad::<2>(cum, gp, id),
             1 => add_grad::<1>(cum, gp, id),
             _ => {}
@@ -501,6 +502,19 @@ fn clip_grad_l2(gp: &mut GradientsParams, adapter: &Adapter, max_norm: f64, devi
     let mut total_sq: f64 = 0.0;
     for (id, rank) in adapter.param_ids() {
         let v: f64 = match rank {
+            3 => gp
+                .remove::<3>(id)
+                .map(|g| {
+                    let v = g
+                        .clone()
+                        .square()
+                        .sum()
+                        .try_into_scalar::<f32>()
+                        .unwrap_or(f32::NAN) as f64;
+                    gp.register(id, g);
+                    v
+                })
+                .unwrap_or(0.0),
             2 => gp
                 .remove::<2>(id)
                 .map(|g| {
