@@ -165,11 +165,12 @@ impl Adapter {
             ids.push((b.id, 1));
         }
         for b in [&self.block1, &self.block2, &self.block3] {
-            ids.push((b.conv1.weight.id, 2));
+            // Conv1d weight là rank 3: [out_ch, in_ch, kernel_size] — KHÔNG phải 2.
+            ids.push((b.conv1.weight.id, 3));
             if let Some(bi) = &b.conv1.bias {
                 ids.push((bi.id, 1));
             }
-            ids.push((b.conv2.weight.id, 2));
+            ids.push((b.conv2.weight.id, 3));
             if let Some(bi) = &b.conv2.bias {
                 ids.push((bi.id, 1));
             }
@@ -318,7 +319,7 @@ mod tests {
             15,
             "param_ids phải bao gồm linear + TCN blocks + pitch_emb: {ids:?}"
         );
-        assert!(ids.iter().all(|(_, r)| *r == 1 || *r == 2));
+        assert!(ids.iter().all(|(_, r)| *r == 1 || *r == 2 || *r == 3));
     }
 
     #[test]
