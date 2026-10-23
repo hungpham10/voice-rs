@@ -343,7 +343,11 @@ pub fn run_training(
             if gn.is_finite() {
                 gn_ema = gn_ema * 0.9 + gn * 0.1;
             }
-            if !lv.is_finite() {
+            // LOSS finite nhưng GRADIENT NaN/Inf vẫn có thể xảy ra (backward với
+            // activation bùng nổ): clip_norm/NaN = NaN → scale mọi grad bằng NaN
+            // → merge ngọt weights. v2.2.26 Colab step 79 chính là vụ này
+            // (zmax=NaN ngay bước sau loss ổn) ⇒ PHẢI chặn cả gn non-finite.
+            if !lv.is_finite() || !gn.is_finite() {
                 nan_skips += 1;
                 // Diagnostics: NaN đến từ đâu? zmax=NaN chỉ ra adapter weights đã
                 // bị ô nhiễm; chỉ wavmax=NaN → decoder/f0; cả hai finite → loss/mel.
@@ -355,13 +359,15 @@ pub fn run_training(
                     Ok(v) => format!("{v:.3}"),
                     Err(_) => "?".to_string(),
                 };
+                let ly = if lv.is_finite() { format!("{lv:.4}") } else { "NaN".into() };
+                let nguon = if gn.is_finite() { "loss-NaN" } else { "grad-NaN" };
                 let utts: String = micro_utts
                     .iter()
                     .map(|(u, o)| format!("{u}@{o}"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 eprintln!(
-                    "step {:>4} micro {}/{} train mel-L1 = NaN → bỏ merge gradient (all-NaN-chuỗi {consec}) gn={gn:.2} zmax={zmax} wavmax={wavmax} utts=[{utts}]",
+                    "step {:>4} micro {}/{} train mel-L1 = {ly} → {nguon}, bỏ merge gradient (all-NaN-chuỗi {consec}) gn={gn:.2} zmax={zmax} wavmax={wavmax} utts=[{utts}]",
                     step + 1,
                     _micro + 1,
                     accum,
@@ -388,6 +394,17 @@ pub fn run_training(
             consec = 0; // có ít nhất 1 micro hợp lệ → chuỗi NaN đứt
             let lr_now = lr_at(step, cfg.steps, cfg.warmup, cfg.lr);
             adapter = optim.step(lr_now, adapter, cum);
+            // Sanity: weight sandwich linear |w| tổng — v2.2.26 đã nhiễm NaN bất
+            // hợp pháp (grad NaN merge ngọt); từ v2.2.27 skip ở trên chặn trước
+            // nhưng belt-and-suspenders: nếu optimizer vẫn sinh NaN → dừng ngay.
+            let wsum = adapter.linear_weight_abs_sum();
+            if !wsum.is_finite() {
+                return Err(format!(
+                    "train diverge: adapter weights NaN sau optimizer step {} (không hề do dữ liệu)",
+                    step + 1
+                )
+                .into());
+            }
         } else {
             eprintln!("step {:>4} toàn bộ micro-batch NaN → bỏ optimizer step", step + 1);
             consec += 1;
