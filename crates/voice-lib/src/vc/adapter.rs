@@ -156,6 +156,18 @@ impl Adapter {
         self.linear.weight.val().dims()[0]
     }
 
+    /// Tổng `|w|` của ma trận linear chính — sanity-check chống weights NaN/Inf
+    /// sau optimizer step (train.rs).
+    pub fn linear_weight_abs_sum(&self) -> f64 {
+        self.linear
+            .weight
+            .val()
+            .abs()
+            .sum()
+            .try_into_scalar::<f32>()
+            .unwrap_or(f32::NAN) as f64
+    }
+
     /// Param id + rank (2 = weight, 1 = bias) của mọi tensor học: linear + 3 block.
     /// Dùng cho grad accumulation bên ngoài module (`train.rs`).
     pub fn param_ids(&self) -> Vec<(ParamId, usize)> {
