@@ -119,29 +119,21 @@ pub fn render(
     for (idx, chunk) in chunks.iter().enumerate() {
         let (feat_start, feat_len, trim_left) = chunk_ctx_span(*chunk, t_out_total, ctx);
 
-        // Tính t_h tương ứng cho feat_len
-        let t_h_seg = ((feat_len as f64 * HUBERT_HZ / LATENT_HZ).round() as usize).max(1);
-        let t_h_start = ((feat_start as f64 * HUBERT_HZ / LATENT_HZ).floor() as usize).min(t_h_full.saturating_sub(1));
-
-        // Slice features [feat_start, feat_start + feat_len) → channel-major
+        // Slice features [feat_start, feat_start + feat_len) → channel-major.
+        // Tính biên HuBERT [h0, h1) TRƯỚC rồi lấy t_h_seg = h1 - h0 — buffer và
+        // vòng lặp dùng chung một công thức, không thể lệch floor/ceil (off-by-one).
         let c = 768;
+        let h0 = ((feat_start as f64 * HUBERT_HZ / LATENT_HZ).floor() as usize)
+            .min(t_h_full.saturating_sub(1));
+        let h1 = (((feat_start + feat_len).min(t_out_total) as f64 * HUBERT_HZ / LATENT_HZ)
+            .ceil() as usize)
+            .max(h0 + 1)
+            .min(t_h_full);
+        let t_h_seg = h1 - h0;
         let mut feats_seg = vec![0.0f32; c * t_h_seg];
-        let actual_t_h = (feat_start + feat_len).min(t_out_total);
-        // Convert latent range to hubert range
-        let h0 = t_h_start;
-        let h1 = ((actual_t_h as f64 * HUBERT_HZ / LATENT_HZ).ceil() as usize).min(t_h_full);
-        let t_h_actual = h1 - h0;
         for ch in 0..c {
-            for t in 0..t_h_actual {
+            for t in 0..t_h_seg {
                 feats_seg[ch * t_h_seg + t] = feats_full_vec[ch * t_h_full + h0 + t];
-            }
-        }
-        // Pad nếu thiếu
-        if t_h_actual < t_h_seg {
-            for ch in 0..c {
-                for t in t_h_actual..t_h_seg {
-                    feats_seg[ch * t_h_seg + t] = 0.0;
-                }
             }
         }
 
